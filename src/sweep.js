@@ -10,20 +10,31 @@
  *
  *  Profile: Post Production Producer, based around Amsterdam, freelance (ZZP).
  *
+ *  KEYWORDS: SWEEP_AMS.keywords lists every title (English + Dutch).
+ *     To keep LinkedIn activity low, search them as the combined OR queries
+ *     in SWEEP_AMS.keywordGroups (one search per group) — not one per keyword.
+ *
  *  1. LINKEDIN JOBS — AMSTERDAM
- *     Search LinkedIn Jobs, location Amsterdam, once per keyword in
- *     SWEEP_AMS.keywords. Use filters: posted in the past week, experience
- *     level Associate and above (see SWEEP_AMS.amsterdamSearch).
+ *     One search per keyword group, location Amsterdam, posted in the past
+ *     week, experience level Associate and above (SWEEP_AMS.amsterdamSearch).
  *
  *  2. LINKEDIN JOBS — REMOTE, CONTRACT/FREELANCE ONLY
- *     Same keywords, remote roles in each of SWEEP_AMS.remoteCountries
- *     (Netherlands, UK, Germany, Poland), job type Contract / Temporary /
- *     Other only (LinkedIn has no "Freelance" type; freelance roles sit there).
+ *     Remote roles in each of SWEEP_AMS.remoteCountries (Netherlands, UK,
+ *     Germany, Poland), job type Contract / Temporary / Other only (LinkedIn
+ *     has no "Freelance" type; freelance roles sit there). English groups for
+ *     every country; the Dutch group only for the Netherlands.
+ *     Use the country's geoId in the URL — LinkedIn ignores location=<name>
+ *     here and silently falls back to the Netherlands.
+ *
+ *  READING RESULTS: only cards above "Expand your search" are real matches.
+ *     A page headed "Jobs you may be interested in" (no result count) means
+ *     ZERO matches — those cards are recommendations; don't save them.
+ *     Open a shortlisted job before saving to check employment type/seniority.
  *
  *  3. LINKEDIN POST SEARCHES — PEOPLE LOOKING TO HIRE
- *     Run 2–3 searches in LinkedIn *posts* (not jobs) with broad, UNQUOTED
- *     keywords from SWEEP_AMS.postSearches, sorted by latest. Look for people
- *     publicly looking to hire a producer / post producer.
+ *     Run every phrase in SWEEP_AMS.postSearches as a LinkedIn *posts* search
+ *     (not jobs), unquoted, sorted by latest. Dutch phrases work far better
+ *     than English ones. Look for people publicly looking to hire a producer.
  *     - A post that describes a concrete role → save it as a job (type
  *       Freelance unless the post says contract), sourceUrl = the post URL,
  *       notes = who posted + a one-line summary.
@@ -66,24 +77,64 @@ export const SWEEP_AMS = {
   appUrl: 'https://productie-zwartboek.vercel.app',
   profile: 'Post Production Producer',
   keywords: [
+    // original set
     'Post Producer',
     'Post production producers',
     'Film Producer',
     'Shoot Producer',
     'Senior post producer',
     'Senior film producer',
+    // video & content leads (added after first sweep, 22 Oct 2026)
+    'Video Lead',
+    'Head of Video',
+    'Senior Video Producer',
+    'Head of Content Production',
+    'Content Production Lead',
+    // senior production roles that include post
+    'Executive Producer',
+    'Head of Production',
+    'Line Producer',
+    'Post Production Supervisor',
+    'Post Production Manager',
+    'Finishing Producer',
+    'Delivery Producer',
+    // Dutch titles
+    'Producent',
+    'Uitvoerend producent',
+    'Postproductie producent',
+    'Productieleider',
+    'Hoofd productie',
+    'Video producer',
   ],
+  // Combined LinkedIn queries — one search per group (covers all keywords above)
+  keywordGroups: {
+    postAndFilm: 'Post Producer OR "post production producer" OR "Film Producer" OR "Shoot Producer" OR "Senior post producer" OR "Senior film producer"',
+    videoAndContent: '"Video Lead" OR "Head of Video" OR "Senior Video Producer" OR "Video producer" OR "Head of Content Production" OR "Content Production Lead"',
+    seniorProduction: '"Executive Producer" OR "Head of Production" OR "Line Producer" OR "Post Production Supervisor" OR "Post Production Manager" OR "Finishing Producer" OR "Delivery Producer"',
+    dutch: 'Producent OR "Uitvoerend producent" OR "Postproductie producent" OR Productieleider OR "Hoofd productie" OR "Video producer"',
+  },
+  dutchGroupOnlyIn: ['Netherlands'],
   amsterdamSearch: {
     location: 'Amsterdam, North Holland, Netherlands',
     // LinkedIn URL params: past week, experience Associate/Mid-Senior/Director/Executive
     params: { f_TPR: 'r604800', f_E: '3,4,5,6' },
   },
   remoteCountries: ['Netherlands', 'United Kingdom', 'Germany', 'Poland'],
+  // LinkedIn geoIds — use &geoId=… (location=<name> is ignored for these searches)
+  geoIds: { Netherlands: '102890719', 'United Kingdom': '101165590', Germany: '101282230', Poland: '105072130' },
   remoteSearch: {
     // remote only; job types Contract, Temporary, Other; past week
     params: { f_WT: '2', f_JT: 'C,T,O', f_TPR: 'r604800' },
   },
-  postSearches: ['freelance producent gezocht', 'looking for a producer amsterdam', 'freelance post producer needed'],
+  // Dutch phrases only — English ones returned nothing useful in the first sweep
+  postSearches: [
+    'freelance producent gezocht',
+    'producent gezocht',
+    'postproductie producent gezocht',
+    'productieleider gezocht',
+    'freelance producer gezocht',
+    'video producer gezocht',
+  ],
   skip: ['junior', 'intern', 'internship', 'stage', 'stagiair', 'trainee', 'graduate', 'werkstudent', 'assistant', 'runner'],
   overdueDays: 14,
 }
