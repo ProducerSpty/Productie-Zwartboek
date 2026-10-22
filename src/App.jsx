@@ -35,12 +35,30 @@ function migrateOrgs(list, kind) {
   return { list: out, changed }
 }
 
+// Crew entries from the first version: role/dayRate/city
+function migrateCrew(list) {
+  let changed = false
+  const out = (list || []).map((r) => {
+    const n = { ...r }
+    if (!n.specialty && n.role) n.specialty = n.role
+    if ((n.rate === undefined || n.rate === '') && n.dayRate) n.rate = n.dayRate
+    if (!n.location && n.city) n.location = n.city
+    if (!n.currency) n.currency = '€'
+    if (JSON.stringify(n) !== JSON.stringify(r)) changed = true
+    return n
+  })
+  return { list: out, changed }
+}
+
 function migrateData(d) {
   const next = { ...d }
   const changed = []
   const p = migratePipeline(next.pipeline)
   next.pipeline = p.list
   if (p.changed) changed.push('pipeline')
+  const crew = migrateCrew(next.crew)
+  next.crew = crew.list
+  if (crew.changed) changed.push('crew')
   for (const k of ['agencies', 'brands']) {
     const m = migrateOrgs(next[k], k)
     next[k] = m.list
@@ -111,6 +129,7 @@ const AGENCY_STATUS = ['Target', 'Researching', 'In Warm Leads', 'Reached out', 
 // Statuses a new Pipeline entry may upgrade to 'In Warm Leads' (never downgrades further-along agencies)
 const WARMABLE_STATUS = ['', 'Target', 'Researching', 'Not a fit']
 const LEGACY_PRIORITY = { High: 5, Medium: 3, Low: 1 }
+const CURRENCIES = ['€', '£', '$']
 const JOB_STATUS = ['Found', 'Applied', 'Interview', 'Offer', 'Accepted', 'Rejected', 'Passed']
 const BOOKING_STATUS = ['1st pencil', '2nd pencil', 'Confirmed', 'Released']
 
@@ -180,26 +199,24 @@ const SECTIONS = {
     columns: ['name', 'contactName', 'sector', 'priority', 'warmIn', 'contactToFind', 'notes'],
   },
   crew: {
-    label: 'Crew',
-    singular: 'Crew member',
+    label: 'Rolodex',
+    singular: 'Person',
     icon: '☺',
-    views: ['table', 'board'],
-    stageField: 'role',
+    views: ['table'],
+    stageField: 'specialty',
     titleField: 'name',
-    subtitle: (r) => [r.role, r.city].filter(Boolean).join(' · '),
+    subtitle: (r) => [r.specialty, r.location].filter(Boolean).join(' · '),
     fields: [
       { key: 'name', label: 'Name', required: true },
-      { key: 'role', label: 'Discipline', type: 'select', options: ['Editor', 'Assistant editor', 'Colorist', 'VFX', 'Motion / 2D', 'Sound design', 'Mix', 'Composer', 'DIT', 'Producer', 'Online / Finishing', 'Other'] },
-      { key: 'city', label: 'City' },
+      { key: 'specialty', label: 'Specialty', placeholder: 'Editor, colorist, sound design…' },
+      { key: 'rate', label: 'Rate', type: 'number', placeholder: 'Day rate' },
+      { key: 'currency', label: 'Currency', type: 'select', options: CURRENCIES, default: '€' },
       { key: 'email', label: 'Email', type: 'email' },
-      { key: 'phone', label: 'Phone' },
-      { key: 'website', label: 'Reel / website', type: 'url' },
-      { key: 'dayRate', label: 'Day rate (€)', type: 'number' },
-      { key: 'rating', label: 'Rating', type: 'select', options: ['★★★★★', '★★★★', '★★★', '★★', '★'] },
-      { key: 'availability', label: 'Availability' },
+      { key: 'website', label: 'Website / reel', type: 'url' },
+      { key: 'location', label: 'Location', placeholder: 'Amsterdam, NL' },
       { key: 'notes', label: 'Notes', type: 'textarea' },
     ],
-    columns: ['name', 'role', 'city', 'dayRate', 'rating', 'email', 'phone'],
+    columns: ['name', 'specialty', 'rate', 'email', 'website', 'location', 'notes'],
   },
   jobs: {
     label: 'Jobs',
@@ -455,6 +472,17 @@ export default function App() {
             onPatch={(record) => upsert('pipeline', record)}
             onDelete={(r) => {
               if (confirm(`Delete ${r.name || 'this contact'}? This can't be undone.`)) remove('pipeline', r.id)
+            }}
+          />
+        ) : tab === 'crew' ? (
+          <RolodexView
+            def={SECTIONS.crew}
+            records={data.crew || []}
+            onNew={(preset) => openNew('crew', preset)}
+            onOpen={(record) => setEditing({ section: 'crew', record })}
+            onPatch={(record) => upsert('crew', record)}
+            onDelete={(r) => {
+              if (confirm(`Delete ${r.name || 'this person'} from your rolodex?`)) remove('crew', r.id)
             }}
           />
         ) : tab === 'agencies' || tab === 'brands' ? (
@@ -1563,6 +1591,189 @@ function OrgRow({ r, columns, linked, onOpen, onPatch, onDelete, onGoPipeline })
       {columns.map((c) => (
         <td key={c.key} className={'col-' + c.key}>{cell(c.key)}</td>
       ))}
+    </tr>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  Rolodex                                                            */
+/* ------------------------------------------------------------------ */
+
+const ROLODEX_COLUMNS = [
+  { key: 'name', label: 'Name', sortable: true },
+  { key: 'specialty', label: 'Specialty', sortable: true },
+  { key: 'rate', label: 'Rate', sortable: true },
+  { key: 'email', label: 'Email', sortable: true },
+  { key: 'website', label: 'Website' },
+  { key: 'location', label: 'Location', sortable: true },
+  { key: 'notes', label: 'Notes' },
+  { key: 'actions', label: '' },
+]
+
+const gmailComposeUrl = (email) =>
+  'https://mail.google.com/mail/?view=cm&fs=1&to=' + encodeURIComponent(email)
+
+function RolodexView({ def, records, onNew, onOpen, onPatch, onDelete }) {
+  const [query, setQuery] = useState('')
+  const [specialty, setSpecialty] = useState('')
+  const [sort, setSort] = useState({ key: 'name', dir: 1 })
+
+  const specialties = useMemo(
+    () => [...new Set(records.map((r) => (r.specialty || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [records]
+  )
+
+  // Search every field, notes included; all words must match (in any field)
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const rows = records
+    .filter((r) => !specialty || (r.specialty || '').trim() === specialty)
+    .filter((r) => {
+      if (!words.length) return true
+      const hay = Object.entries(r)
+        .filter(([k]) => !['id', 'createdAt', 'updatedAt'].includes(k))
+        .map(([, v]) => String(v ?? ''))
+        .join(' \u0001 ')
+        .toLowerCase()
+      return words.every((w) => hay.includes(w))
+    })
+    .sort((a, b) => {
+      const { key, dir } = sort
+      if (key === 'rate') {
+        const av = a.rate === '' || a.rate == null ? null : Number(a.rate)
+        const bv = b.rate === '' || b.rate == null ? null : Number(b.rate)
+        if (av === null && bv !== null) return 1
+        if (av !== null && bv === null) return -1
+        return ((av || 0) - (bv || 0)) * dir
+      }
+      const av = String(a[key] || '')
+      const bv = String(b[key] || '')
+      if (!av && bv) return 1
+      if (av && !bv) return -1
+      return av.localeCompare(bv, undefined, { sensitivity: 'base' }) * dir
+    })
+
+  function clickHeader(col) {
+    if (!col.sortable) return
+    setSort((s) => (s.key === col.key ? { key: col.key, dir: -s.dir } : { key: col.key, dir: 1 }))
+  }
+
+  return (
+    <div className="page page-wide">
+      <header className="page-head">
+        <div>
+          <h1>{def.label}</h1>
+          <p className="muted">
+            {words.length || specialty ? `${rows.length} of ${records.length}` : records.length} {records.length === 1 ? 'person' : 'people'}
+          </p>
+        </div>
+        <div className="toolbar">
+          <input
+            className="search search-wide"
+            placeholder="Search everything, incl. notes…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {specialties.length > 0 && (
+            <select value={specialty} onChange={(e) => setSpecialty(e.target.value)}>
+              <option value="">Any specialty</option>
+              {specialties.map((s) => <option key={s}>{s}</option>)}
+            </select>
+          )}
+          <button className="btn primary" onClick={() => onNew()}>+ Add person</button>
+        </div>
+      </header>
+
+      {records.length === 0 ? (
+        <div className="empty">
+          <p>Your rolodex is empty.</p>
+          <button className="btn primary" onClick={() => onNew()}>Add the first person</button>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table className="pipe-table org-table rolodex-table">
+            <thead>
+              <tr>
+                {ROLODEX_COLUMNS.map((c) => (
+                  <th key={c.key} className={'col-' + c.key + (c.sortable ? '' : ' nosort')} onClick={() => clickHeader(c)}>
+                    {c.label}
+                    {sort.key === c.key && <span className="sort">{sort.dir === 1 ? ' ↑' : ' ↓'}</span>}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <RolodexRow key={r.id} r={r} onOpen={onOpen} onPatch={onPatch} onDelete={onDelete} />
+              ))}
+              {rows.length === 0 && (
+                <tr><td colSpan={ROLODEX_COLUMNS.length} className="muted small">Nobody matches “{query}”.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RolodexRow({ r, onOpen, onPatch, onDelete }) {
+  const patch = (changes) => onPatch({ ...r, ...changes })
+  const currency = CURRENCIES.includes(r.currency) ? r.currency : '€'
+  const nextCurrency = CURRENCIES[(CURRENCIES.indexOf(currency) + 1) % CURRENCIES.length]
+
+  return (
+    <tr className="pipe-row">
+      <td className="col-name">
+        <button className="name-btn" onClick={() => onOpen(r)} title="Open full details">{r.name || 'Unnamed'}</button>
+      </td>
+      <td className="col-specialty">
+        <DraftField value={r.specialty} placeholder="Specialty…" onCommit={(v) => patch({ specialty: v })} />
+      </td>
+      <td className="col-rate">
+        <div className="rate-cell">
+          <button
+            className="currency"
+            title={`Switch to ${nextCurrency}`}
+            onClick={() => patch({ currency: nextCurrency })}
+          >
+            {currency}
+          </button>
+          <DraftField
+            value={r.rate === undefined || r.rate === null ? '' : String(r.rate)}
+            placeholder="—"
+            onCommit={(v) => {
+              const cleaned = v.replace(/[^\d.,]/g, '').replace(',', '.')
+              patch({ rate: cleaned === '' ? '' : Number(cleaned) })
+            }}
+          />
+        </div>
+      </td>
+      <td className="col-email">
+        {r.email ? <a href={'mailto:' + r.email}>{r.email}</a> : <span className="muted">—</span>}
+      </td>
+      <td className="col-website">
+        {r.website ? (
+          <a href={siteHref(r.website)} target="_blank" rel="noreferrer">{siteLabel(r.website)}</a>
+        ) : (
+          <span className="muted">—</span>
+        )}
+      </td>
+      <td className="col-location">
+        <DraftField value={r.location} placeholder="Location…" onCommit={(v) => patch({ location: v })} />
+      </td>
+      <td className="col-notes">
+        <DraftField multiline value={r.notes} placeholder="Notes…" onCommit={(v) => patch({ notes: v })} />
+      </td>
+      <td className="col-actions">
+        {r.email ? (
+          <a className="mini gmail" href={gmailComposeUrl(r.email)} target="_blank" rel="noreferrer" title={`Write to ${r.email} in Gmail`}>
+            ✉ Gmail
+          </a>
+        ) : (
+          <button className="mini" disabled title="Add an email address first">✉ Gmail</button>
+        )}
+        <button className="mini danger" onClick={() => onDelete(r)}>Delete</button>
+      </td>
     </tr>
   )
 }

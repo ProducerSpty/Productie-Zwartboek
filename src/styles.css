@@ -275,3 +275,20 @@ textarea { resize: vertical; }
 .warm-toggle { border: 1px solid var(--line); background: var(--surface); border-radius: 20px; padding: 2px 12px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .warm-toggle.on { background: #fde4cf; border-color: #f5c9a3; color: #9a4b0e; }
 .pipe-link { background: none; border: 0; padding: 0; text-align: left; }
+
+/* Rolodex */
+.search-wide { width: 280px; }
+.rolodex-table .col-specialty { min-width: 130px; }
+.rolodex-table .col-rate { width: 120px; }
+.rolodex-table .col-location { min-width: 120px; }
+.rolodex-table .col-notes { min-width: 200px; }
+.rolodex-table .col-actions { width: 84px; }
+.rolodex-table .col-actions .mini { display: block; width: 100%; margin: 0 0 4px; text-align: center; text-decoration: none; }
+.rate-cell { display: flex; align-items: center; gap: 2px; }
+.rate-cell .cell-input { min-width: 60px; }
+.currency { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; width: 26px; height: 26px; font-weight: 700; font-size: 13px; flex-shrink: 0; }
+.currency:hover { border-color: var(--ink); }
+.mini:disabled { opacity: .45; cursor: not-allowed; }
+.mini.gmail { color: var(--ink); }
+.mini.gmail:hover { border-color: var(--ink); }
+@media (max-width: 820px) { .search-wide { width: 100%; } }
