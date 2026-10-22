@@ -19,8 +19,98 @@ function migratePipeline(list) {
   })
   return { list: out, changed }
 }
-const OUTREACH_STATUS = ['Target', 'Researching', 'Reached out', 'In conversation', 'Worked with', 'Not a fit']
-const PRIORITY = ['High', 'Medium', 'Low']
+
+// Agencies/brands from the first version: text priorities, city/country, industry
+function migrateOrgs(list, kind) {
+  let changed = false
+  const out = (list || []).map((r) => {
+    const n = { ...r }
+    if (typeof n.priority === 'string') n.priority = LEGACY_PRIORITY[n.priority] ?? (Number(n.priority) || 0)
+    if (kind === 'agencies' && !n.location && (n.city || n.country)) n.location = [n.city, n.country].filter(Boolean).join(', ')
+    if (kind === 'brands' && !n.sector && n.industry) n.sector = n.industry
+    if (kind === 'brands' && !n.warmIn) n.warmIn = 'No'
+    if (JSON.stringify(n) !== JSON.stringify(r)) changed = true
+    return n
+  })
+  return { list: out, changed }
+}
+
+function migrateData(d) {
+  const next = { ...d }
+  const changed = []
+  const p = migratePipeline(next.pipeline)
+  next.pipeline = p.list
+  if (p.changed) changed.push('pipeline')
+  for (const k of ['agencies', 'brands']) {
+    const m = migrateOrgs(next[k], k)
+    next[k] = m.list
+    if (m.changed) changed.push(k)
+  }
+  return { next, changed }
+}
+
+/* ---------- Sync rules between Agencies / Brands and Pipeline ---------- */
+
+const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+
+// Called after a record is created or edited. `before` is the previous version (undefined if new).
+function applySyncRules(data, section, saved, before, now) {
+  let next = data
+
+  // 1. Agency/brand saved with a (new) contact person -> Pipeline entry at Radar
+  if ((section === 'agencies' || section === 'brands') && normName(saved.contactName)) {
+    const contactChanged = !before || normName(before.contactName) !== normName(saved.contactName)
+    const pipeline = next.pipeline || []
+    const exists = pipeline.some(
+      (r) => normName(r.name) === normName(saved.contactName) && normName(r.company) === normName(saved.name)
+    )
+    if (contactChanged && !exists) {
+      next = {
+        ...next,
+        pipeline: [
+          ...pipeline,
+          {
+            id: uid(),
+            name: saved.contactName.trim(),
+            company: saved.name,
+            email: saved.email || '',
+            stage: 'Radar',
+            source: section === 'agencies' ? 'Agencies & Studios' : 'Brands',
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      }
+    }
+  }
+
+  // 2. New Pipeline entry for a company that matches an agency/brand -> mark it warm
+  if (section === 'pipeline' && !before && normName(saved.company)) {
+    const key = normName(saved.company)
+    const agencies = next.agencies || []
+    if (agencies.some((a) => normName(a.name) === key && WARMABLE_STATUS.includes(a.status || ''))) {
+      next = {
+        ...next,
+        agencies: agencies.map((a) =>
+          normName(a.name) === key && WARMABLE_STATUS.includes(a.status || '') ? { ...a, status: 'In Warm Leads', updatedAt: now } : a
+        ),
+      }
+    }
+    const brands = next.brands || []
+    if (brands.some((b) => normName(b.name) === key && b.warmIn !== 'Yes')) {
+      next = {
+        ...next,
+        brands: brands.map((b) => (normName(b.name) === key && b.warmIn !== 'Yes' ? { ...b, warmIn: 'Yes', updatedAt: now } : b)),
+      }
+    }
+  }
+  return next
+}
+
+const AGENCY_STATUS = ['Target', 'Researching', 'In Warm Leads', 'Reached out', 'In conversation', 'Worked with', 'Not a fit']
+// Statuses a new Pipeline entry may upgrade to 'In Warm Leads' (never downgrades further-along agencies)
+const WARMABLE_STATUS = ['', 'Target', 'Researching', 'Not a fit']
+const LEGACY_PRIORITY = { High: 5, Medium: 3, Low: 1 }
 const JOB_STATUS = ['Found', 'Applied', 'Interview', 'Offer', 'Accepted', 'Rejected', 'Passed']
 const BOOKING_STATUS = ['1st pencil', '2nd pencil', 'Confirmed', 'Released']
 
@@ -54,47 +144,40 @@ const SECTIONS = {
     label: 'Agencies & Studios',
     singular: 'Agency / Studio',
     icon: '▣',
-    views: ['board', 'table'],
+    views: ['table'],
     stageField: 'status',
     titleField: 'name',
-    subtitle: (r) => [r.type, r.city].filter(Boolean).join(' · '),
+    subtitle: (r) => [r.contactName, r.location].filter(Boolean).join(' · '),
     fields: [
-      { key: 'name', label: 'Name', required: true },
-      { key: 'type', label: 'Type', type: 'select', options: ['Creative agency', 'Production company', 'Post house', 'VFX studio', 'Animation studio', 'Broadcaster / Streamer', 'Other'] },
-      { key: 'status', label: 'Status', type: 'select', options: OUTREACH_STATUS, default: 'Target' },
-      { key: 'priority', label: 'Priority', type: 'select', options: PRIORITY, default: 'Medium' },
-      { key: 'city', label: 'City' },
-      { key: 'country', label: 'Country' },
-      { key: 'website', label: 'Website', type: 'url' },
-      { key: 'contactName', label: 'Key contact' },
+      { key: 'name', label: 'Agency name', required: true },
+      { key: 'contactName', label: 'Contact person' },
       { key: 'email', label: 'Email', type: 'email' },
-      { key: 'lastContact', label: 'Last contact', type: 'date' },
+      { key: 'website', label: 'Website', type: 'url' },
+      { key: 'location', label: 'Location', placeholder: 'Amsterdam, NL' },
+      { key: 'priority', label: 'Priority', type: 'stars', default: 0 },
+      { key: 'status', label: 'Status', type: 'select', options: AGENCY_STATUS, default: 'Target' },
       { key: 'notes', label: 'Notes', type: 'textarea' },
     ],
-    columns: ['name', 'type', 'city', 'status', 'priority', 'contactName', 'lastContact'],
+    columns: ['name', 'contactName', 'email', 'website', 'location', 'priority', 'status', 'notes'],
   },
   brands: {
     label: 'Brands',
     singular: 'Brand',
     icon: '◆',
-    views: ['board', 'table'],
-    stageField: 'status',
+    views: ['table'],
+    stageField: 'warmIn',
     titleField: 'name',
-    subtitle: (r) => [r.industry, r.contactName].filter(Boolean).join(' · '),
+    subtitle: (r) => [r.sector, r.contactName].filter(Boolean).join(' · '),
     fields: [
-      { key: 'name', label: 'Brand', required: true },
-      { key: 'industry', label: 'Industry' },
-      { key: 'status', label: 'Status', type: 'select', options: OUTREACH_STATUS, default: 'Target' },
-      { key: 'priority', label: 'Priority', type: 'select', options: PRIORITY, default: 'Medium' },
-      { key: 'website', label: 'Website', type: 'url' },
-      { key: 'contactName', label: 'Contact (in-house)' },
-      { key: 'contactRole', label: 'Contact role' },
-      { key: 'email', label: 'Email', type: 'email' },
-      { key: 'angle', label: 'Pitch angle', type: 'textarea' },
-      { key: 'lastContact', label: 'Last contact', type: 'date' },
+      { key: 'name', label: 'Brand name', required: true },
+      { key: 'contactName', label: 'Contact name' },
+      { key: 'sector', label: 'Sector', placeholder: 'Fashion, automotive, FMCG…' },
+      { key: 'priority', label: 'Priority', type: 'stars', default: 0 },
+      { key: 'warmIn', label: 'Warm in', type: 'select', options: ['Yes', 'No'], default: 'No' },
+      { key: 'contactToFind', label: 'Contact to find', placeholder: 'e.g. Head of Content, Brand Manager' },
       { key: 'notes', label: 'Notes', type: 'textarea' },
     ],
-    columns: ['name', 'industry', 'status', 'priority', 'contactName', 'lastContact'],
+    columns: ['name', 'contactName', 'sector', 'priority', 'warmIn', 'contactToFind', 'notes'],
   },
   crew: {
     label: 'Crew',
@@ -230,13 +313,12 @@ export default function App() {
         setData((d) => {
           const next = { ...d }
           for (const k of KEYS) if (Array.isArray(remote[k])) next[k] = remote[k]
-          const m = migratePipeline(next.pipeline)
-          next.pipeline = m.list
-          if (m.changed) {
-            dirty.current.add('pipeline')
-            scheduleSave(next)
+          const m = migrateData(next)
+          if (m.changed.length) {
+            m.changed.forEach((k) => dirty.current.add(k))
+            scheduleSave(m.next)
           }
-          return next
+          return m.next
         })
         setMeta({ lastSweep: remote.lastSweep || null })
         setSync('saved')
@@ -244,7 +326,7 @@ export default function App() {
         console.error(e)
         try {
           const cached = JSON.parse(localStorage.getItem(LOCAL_CACHE) || '{}')
-          setData((d) => { const next = { ...d, ...cached }; next.pipeline = migratePipeline(next.pipeline).list; return next })
+          setData((d) => migrateData({ ...d, ...cached }).next)
         } catch {}
         setSync('offline')
         setErrorMsg(e.message || String(e))
@@ -289,13 +371,31 @@ export default function App() {
     })
   }
 
+  // Apply a change that may touch several sections at once
+  function mutate(fn) {
+    setData((prev) => {
+      const next = fn(prev)
+      for (const k of KEYS) if (next[k] !== prev[k]) dirty.current.add(k)
+      scheduleSave(next)
+      return next
+    })
+  }
+
   function upsert(section, record) {
-    const now = new Date().toISOString()
-    update(section, (list) => {
-      if (record.id && list.some((r) => r.id === record.id)) {
-        return list.map((r) => (r.id === record.id ? { ...record, updatedAt: now } : r))
+    mutate((prev) => {
+      const now = new Date().toISOString()
+      const list = prev[section] || []
+      const before = record.id ? list.find((r) => r.id === record.id) : undefined
+      let saved
+      let next
+      if (before) {
+        saved = { ...record, updatedAt: now }
+        next = { ...prev, [section]: list.map((r) => (r.id === record.id ? saved : r)) }
+      } else {
+        saved = { ...record, id: record.id || uid(), createdAt: now, updatedAt: now }
+        next = { ...prev, [section]: [...list, saved] }
       }
-      return [...list, { ...record, id: record.id || uid(), createdAt: now, updatedAt: now }]
+      return applySyncRules(next, section, saved, before, now)
     })
   }
 
@@ -356,6 +456,21 @@ export default function App() {
             onDelete={(r) => {
               if (confirm(`Delete ${r.name || 'this contact'}? This can't be undone.`)) remove('pipeline', r.id)
             }}
+          />
+        ) : tab === 'agencies' || tab === 'brands' ? (
+          <OrgTable
+            key={tab}
+            sectionKey={tab}
+            def={SECTIONS[tab]}
+            records={data[tab] || []}
+            pipeline={data.pipeline || []}
+            onNew={(preset) => openNew(tab, preset)}
+            onOpen={(record) => setEditing({ section: tab, record })}
+            onPatch={(record) => upsert(tab, record)}
+            onDelete={(r) => {
+              if (confirm(`Delete ${r.name || 'this entry'}? Its Pipeline contacts are kept.`)) remove(tab, r.id)
+            }}
+            onGoPipeline={() => setTab('pipeline')}
           />
         ) : (
           <SectionView
@@ -425,7 +540,6 @@ function SyncBadge({ state, error }) {
 /* ------------------------------------------------------------------ */
 
 const ACTIVE_JOB_STATUSES = ['Applied', 'Interview', 'Offer']
-const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
 const addDays = (iso, n) => {
   const d = new Date(iso + 'T00:00:00')
   d.setDate(d.getDate() + n)
@@ -496,7 +610,7 @@ function Overview({ data, meta, goTo, onOpen, onNew }) {
     .filter((a) => (a.contactName || a.email) && a.status !== 'Not a fit')
     .filter((a) => !activeCompanies.has(normName(a.name)))
     .filter((a) => !(a.email && activeEmails.has(a.email.toLowerCase())))
-    .sort((a, b) => PRIORITY.indexOf(a.priority || 'Low') - PRIORITY.indexOf(b.priority || 'Low'))
+    .sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0))
 
   const followUps = activePipeline
     .filter((r) => r.nextDate && r.nextDate <= in30)
@@ -550,7 +664,7 @@ function Overview({ data, meta, goTo, onOpen, onNew }) {
                 <div className="row-title">{a.name}</div>
                 <div className="row-sub">{[a.contactName, a.email].filter(Boolean).join(' · ')}</div>
               </button>
-              {a.priority && <span className={'pri pri-' + a.priority.toLowerCase()}>{a.priority}</span>}
+              {Number(a.priority) > 0 && <span className="stars-static">{'★'.repeat(Number(a.priority))}</span>}
               <button
                 className="btn btn-sm"
                 onClick={() =>
@@ -760,7 +874,7 @@ function Board({ def, records, onOpen, onPatch, onNew }) {
 function CardMeta({ r }) {
   const today = todayISO()
   const bits = []
-  if (r.priority) bits.push(<span key="p" className={'pri pri-' + r.priority.toLowerCase()}>{r.priority}</span>)
+  if (Number(r.priority) > 0) bits.push(<span key="p" className="stars-static">{'★'.repeat(Number(r.priority))}</span>)
   if (r.value) bits.push(<span key="v" className="muted">{fmtMoney(r.value)}</span>)
   if (r.nextDate) bits.push(<span key="n" className={r.nextDate < today ? 'overdue' : 'muted'}>↻ {fmtDate(r.nextDate)}</span>)
   if (r.deadline) bits.push(<span key="d" className={r.deadline < today ? 'overdue' : 'muted'}>⏱ {fmtDate(r.deadline)}</span>)
@@ -923,7 +1037,9 @@ function RecordModal({ def, record, onClose, onSave, onDelete }) {
           {def.fields.map((f) => (
             <label key={f.key} className={f.type === 'textarea' ? 'full' : ''}>
               <span>{f.label}{f.required && ' *'}</span>
-              {f.type === 'select' ? (
+              {f.type === 'stars' ? (
+                <StarRating value={form[f.key]} onChange={(v) => set(f.key, v)} />
+              ) : f.type === 'select' ? (
                 <select value={form[f.key] ?? ''} onChange={(e) => set(f.key, e.target.value)}>
                   <option value="">—</option>
                   {f.options.map((o) => <option key={o}>{o}</option>)}
@@ -1224,4 +1340,229 @@ function DraftField({ value, onCommit, multiline, placeholder }) {
     },
   }
   return multiline ? <textarea rows={2} className="cell-input cell-notes" {...props} /> : <input className="cell-input" {...props} />
+}
+
+/* ------------------------------------------------------------------ */
+/*  Agencies & Brands tables                                           */
+/* ------------------------------------------------------------------ */
+
+function StarRating({ value, onChange, size }) {
+  const n = Number(value) || 0
+  return (
+    <span className={'stars' + (size === 'sm' ? ' stars-sm' : '')} role="radiogroup" aria-label="Priority">
+      {[1, 2, 3, 4, 5].map((i) => (
+        <button
+          type="button"
+          key={i}
+          className={i <= n ? 'on' : ''}
+          title={i === n ? 'Clear priority' : `${i} star${i > 1 ? 's' : ''}`}
+          onClick={() => onChange(i === n ? 0 : i)}
+        >
+          ★
+        </button>
+      ))}
+    </span>
+  )
+}
+
+const ORG_COLUMNS = {
+  agencies: [
+    { key: 'priority', label: 'Priority', sortable: true },
+    { key: 'name', label: 'Agency', sortable: true },
+    { key: 'contactName', label: 'Contact person', sortable: true },
+    { key: 'email', label: 'Email' },
+    { key: 'website', label: 'Website' },
+    { key: 'location', label: 'Location', sortable: true },
+    { key: 'status', label: 'Status', sortable: true },
+    { key: 'pipeline', label: 'Pipeline' },
+    { key: 'notes', label: 'Notes' },
+    { key: 'actions', label: '' },
+  ],
+  brands: [
+    { key: 'priority', label: 'Priority', sortable: true },
+    { key: 'name', label: 'Brand', sortable: true },
+    { key: 'contactName', label: 'Contact', sortable: true },
+    { key: 'sector', label: 'Sector', sortable: true },
+    { key: 'warmIn', label: 'Warm in', sortable: true },
+    { key: 'contactToFind', label: 'Contact to find' },
+    { key: 'pipeline', label: 'Pipeline' },
+    { key: 'notes', label: 'Notes' },
+    { key: 'actions', label: '' },
+  ],
+}
+
+const siteHref = (u) => (!u ? '' : /^https?:\/\//i.test(u) ? u : 'https://' + u)
+const siteLabel = (u) => String(u || '').replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/$/, '')
+
+function OrgTable({ sectionKey, def, records, pipeline, onNew, onOpen, onPatch, onDelete, onGoPipeline }) {
+  const columns = ORG_COLUMNS[sectionKey]
+  const filterField = def.fields.find((f) => f.key === def.stageField)
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState('')
+  const [sort, setSort] = useState({ key: 'priority', dir: -1 })
+
+  // Pipeline entries per company, for the link column
+  const pipelineByCompany = useMemo(() => {
+    const m = new Map()
+    for (const r of pipeline) {
+      const k = normName(r.company)
+      if (!k) continue
+      if (!m.has(k)) m.set(k, [])
+      m.get(k).push(r)
+    }
+    return m
+  }, [pipeline])
+
+  const q = query.trim().toLowerCase()
+  const rows = records
+    .filter((r) => !filter || (r[def.stageField] || '') === filter)
+    .filter((r) => !q || Object.values(r).some((v) => String(v ?? '').toLowerCase().includes(q)))
+    .sort((a, b) => {
+      const { key, dir } = sort
+      let c
+      if (key === 'priority') c = (Number(a.priority) || 0) - (Number(b.priority) || 0)
+      else if (key === 'status') c = AGENCY_STATUS.indexOf(a.status) - AGENCY_STATUS.indexOf(b.status)
+      else {
+        const av = String(a[key] || '')
+        const bv = String(b[key] || '')
+        if (!av && bv) return 1
+        if (av && !bv) return -1
+        c = av.localeCompare(bv, undefined, { sensitivity: 'base' })
+      }
+      return c * dir || String(a.name || '').localeCompare(String(b.name || ''))
+    })
+
+  function clickHeader(col) {
+    if (!col.sortable) return
+    setSort((s) => (s.key === col.key ? { key: col.key, dir: -s.dir } : { key: col.key, dir: col.key === 'priority' ? -1 : 1 }))
+  }
+
+  return (
+    <div className="page page-wide">
+      <header className="page-head">
+        <div>
+          <h1>{def.label}</h1>
+          <p className="muted">
+            {records.length} {records.length === 1 ? 'entry' : 'entries'} · adding a contact person creates a Radar entry in Pipeline
+          </p>
+        </div>
+        <div className="toolbar">
+          <input className="search" placeholder="Search…" value={query} onChange={(e) => setQuery(e.target.value)} />
+          <select value={filter} onChange={(e) => setFilter(e.target.value)}>
+            <option value="">{sectionKey === 'brands' ? 'Warm in: any' : 'Any status'}</option>
+            {filterField.options.map((o) => (
+              <option key={o} value={o}>{sectionKey === 'brands' ? `Warm in: ${o}` : o}</option>
+            ))}
+          </select>
+          <button className="btn primary" onClick={() => onNew()}>+ New {def.singular.toLowerCase()}</button>
+        </div>
+      </header>
+
+      {records.length === 0 ? (
+        <div className="empty">
+          <p>No {def.label.toLowerCase()} yet.</p>
+          <button className="btn primary" onClick={() => onNew()}>Add the first one</button>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table className="pipe-table org-table">
+            <thead>
+              <tr>
+                {columns.map((c) => (
+                  <th key={c.key} className={'col-' + c.key + (c.sortable ? '' : ' nosort')} onClick={() => clickHeader(c)}>
+                    {c.label}
+                    {sort.key === c.key && <span className="sort">{sort.dir === 1 ? ' ↑' : ' ↓'}</span>}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <OrgRow
+                  key={r.id}
+                  r={r}
+                  columns={columns}
+                  linked={(pipelineByCompany.get(normName(r.name)) || []).filter((p) => p.stage !== 'Archived')}
+                  onOpen={onOpen}
+                  onPatch={onPatch}
+                  onDelete={onDelete}
+                  onGoPipeline={onGoPipeline}
+                />
+              ))}
+              {rows.length === 0 && (
+                <tr><td colSpan={columns.length} className="muted small">No matches.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function OrgRow({ r, columns, linked, onOpen, onPatch, onDelete, onGoPipeline }) {
+  const patch = (changes) => onPatch({ ...r, ...changes })
+  const cell = (key) => {
+    switch (key) {
+      case 'priority':
+        return <StarRating size="sm" value={r.priority} onChange={(v) => patch({ priority: v })} />
+      case 'name':
+        return (
+          <button className="name-btn" onClick={() => onOpen(r)} title="Open full details">
+            {r.name || 'Unnamed'}
+          </button>
+        )
+      case 'contactName':
+        return <DraftField value={r.contactName} placeholder="Add contact…" onCommit={(v) => patch({ contactName: v })} />
+      case 'email':
+        return r.email ? <a href={'mailto:' + r.email}>{r.email}</a> : <span className="muted">—</span>
+      case 'website':
+        return r.website ? (
+          <a href={siteHref(r.website)} target="_blank" rel="noreferrer">{siteLabel(r.website)}</a>
+        ) : (
+          <span className="muted">—</span>
+        )
+      case 'status':
+        return (
+          <select className={'stage-select ' + stageClass(r.status)} value={r.status || ''} onChange={(e) => patch({ status: e.target.value })}>
+            {!AGENCY_STATUS.includes(r.status) && <option value={r.status || ''}>{r.status || '—'}</option>}
+            {AGENCY_STATUS.map((s) => <option key={s}>{s}</option>)}
+          </select>
+        )
+      case 'warmIn':
+        return (
+          <button
+            className={'warm-toggle' + (r.warmIn === 'Yes' ? ' on' : '')}
+            onClick={() => patch({ warmIn: r.warmIn === 'Yes' ? 'No' : 'Yes' })}
+            title="Toggle warm intro"
+          >
+            {r.warmIn === 'Yes' ? 'Yes' : 'No'}
+          </button>
+        )
+      case 'contactToFind':
+        return <DraftField value={r.contactToFind} placeholder="Role to find…" onCommit={(v) => patch({ contactToFind: v })} />
+      case 'pipeline':
+        return linked.length ? (
+          <button className="pipe-link" onClick={onGoPipeline} title={linked.map((p) => `${p.name} — ${p.stage}`).join('\n')}>
+            <span className={stageClass(linked[0].stage)}>{linked[0].stage}</span>
+            {linked.length > 1 && <span className="muted small"> +{linked.length - 1}</span>}
+          </button>
+        ) : (
+          <span className="muted small">—</span>
+        )
+      case 'notes':
+        return <DraftField multiline value={r.notes} placeholder="Notes…" onCommit={(v) => patch({ notes: v })} />
+      case 'actions':
+        return <button className="mini danger" onClick={() => onDelete(r)}>Delete</button>
+      default:
+        return r[key]
+    }
+  }
+  return (
+    <tr className={'pipe-row' + (Number(r.priority) >= 4 ? ' starred' : '')}>
+      {columns.map((c) => (
+        <td key={c.key} className={'col-' + c.key}>{cell(c.key)}</td>
+      ))}
+    </tr>
+  )
 }

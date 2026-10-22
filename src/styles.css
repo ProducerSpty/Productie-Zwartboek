@@ -250,3 +250,28 @@ textarea { resize: vertical; }
 .age-fresh { color: #22764a; font-weight: 600; }
 .age-mid { color: #8a5f10; font-weight: 600; }
 .age-old { color: var(--accent); font-weight: 600; }
+
+/* Agencies & Brands */
+.tag-in-warm-leads { background: #fde4cf; color: #9a4b0e; }
+.tag-reached-out { background: #e3ecf7; color: #2c5a8c; }
+.tag-in-conversation { background: #ece4f6; color: #6a3e9c; }
+.stars { display: inline-flex; gap: 1px; }
+.stars button { background: none; border: 0; padding: 0 1px; font-size: 20px; line-height: 1; color: #d8d3ca; }
+.stars button.on { color: #d9a21b; }
+.stars:hover button { color: #e9c66a; }
+.stars:hover button:hover ~ button { color: #d8d3ca; }
+.stars-sm button { font-size: 16px; }
+.stars-static { color: #d9a21b; letter-spacing: 1px; font-size: 12px; }
+.org-table td, .org-table th { padding-left: 8px; padding-right: 8px; }
+.org-table .col-priority { width: 92px; white-space: nowrap !important; }
+.org-table .col-name { min-width: 120px; }
+.org-table .col-contactName, .org-table .col-contactToFind { min-width: 120px; }
+.org-table td.col-email, .org-table td.col-website { min-width: 120px; max-width: 190px; overflow-wrap: anywhere; font-size: 13px; }
+.org-table .col-location, .org-table .col-sector { min-width: 90px; }
+.org-table .col-status { width: 140px; }
+.org-table .col-pipeline { width: 84px; }
+.org-table .col-notes { min-width: 150px; }
+.org-table .col-actions { width: 64px; }
+.warm-toggle { border: 1px solid var(--line); background: var(--surface); border-radius: 20px; padding: 2px 12px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.warm-toggle.on { background: #fde4cf; border-color: #f5c9a3; color: #9a4b0e; }
+.pipe-link { background: none; border: 0; padding: 0; text-align: left; }
