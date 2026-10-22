@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { loadAll, saveKey } from './supabase.js'
+// Sweep instructions ("Run sweep AMS") are documented at the top of sweep.js
+import { prepareSweepJobs, overdueContacts, SWEEP_AMS } from './sweep.js'
 
 /* ------------------------------------------------------------------ */
 /*  Section definitions — each one is stored as a JSON array under key */
@@ -314,13 +316,14 @@ const SECTIONS = {
 
 const KEYS = Object.keys(SECTIONS)
 const openJobs = (data, type) => (data.jobs || []).filter((j) => j.type === type && !j.outcome).length
+const newJobs = (data, type) => (data.jobs || []).filter((j) => j.type === type && j.isNew).length
 const NAV = [
   { tab: 'pipeline', label: 'Pipeline', icon: '◎', count: (d) => (d.pipeline || []).filter((r) => r.stage !== 'Archived').length },
   { tab: 'agencies', label: 'Agencies & Studios', icon: '▣', count: (d) => (d.agencies || []).length },
   { tab: 'brands', label: 'Brands', icon: '◆', count: (d) => (d.brands || []).length },
   { tab: 'crew', label: 'Rolodex', icon: '☺', count: (d) => (d.crew || []).length },
-  { tab: 'jobs-freelance', label: 'Freelance Jobs', icon: '✦', count: (d) => openJobs(d, 'Freelance') },
-  { tab: 'jobs-contract', label: 'Contract Jobs', icon: '✧', count: (d) => openJobs(d, 'Contract') },
+  { tab: 'jobs-freelance', label: 'Freelance Jobs', icon: '✦', count: (d) => openJobs(d, 'Freelance'), fresh: (d) => newJobs(d, 'Freelance') },
+  { tab: 'jobs-contract', label: 'Contract Jobs', icon: '✧', count: (d) => openJobs(d, 'Contract'), fresh: (d) => newJobs(d, 'Contract') },
   { tab: 'bookings', label: 'Bookings & Pencils', icon: '▦', count: (d) => (d.bookings || []).filter((b) => !b.released && (b.end || b.start) >= todayISO()).length },
 ]
 const LOCAL_CACHE = 'zwartboek-cache-v1'
@@ -381,6 +384,8 @@ export default function App() {
   }
   const [editing, setEditing] = useState(null) // { section, record }
   const dirty = useRef(new Set())
+  const dataRef = useRef(data)
+  dataRef.current = data
   const timer = useRef(null)
 
   // Initial load from Supabase (fallback to local cache)
@@ -418,6 +423,47 @@ export default function App() {
       cancelled = true
     }
   }, [])
+
+  // Hooks for the "Run sweep AMS" job sweep (see sweep.js). Only touches `jobs`; never the pipeline.
+  useEffect(() => {
+    if (!loaded) return
+    window.zwartboek = {
+      sweep: SWEEP_AMS,
+      ready: true,
+      async importSweep(rawJobs) {
+        const now = new Date().toISOString()
+        const today = todayISO()
+        const current = dataRef.current.jobs || []
+        const res = prepareSweepJobs(rawJobs, current, { today, now, makeId: uid })
+        const nextJobs = [...current, ...res.toAdd]
+        if (res.toAdd.length) {
+          setData((prev) => {
+            const ids = new Set((prev.jobs || []).map((j) => j.id))
+            return { ...prev, jobs: [...(prev.jobs || []), ...res.toAdd.filter((j) => !ids.has(j.id))] }
+          })
+          await saveKey('jobs', nextJobs)
+        }
+        const lastSweep = { at: now, name: 'AMS', jobIds: res.toAdd.map((j) => j.id) }
+        await saveKey('lastSweep', lastSweep)
+        setMeta((m) => ({ ...m, lastSweep }))
+        return {
+          added: res.toAdd.map((j) => ({ type: j.type, role: j.role, company: j.company, url: j.sourceUrl })),
+          duplicates: res.duplicates,
+          skipped: res.skipped,
+          invalid: res.invalid.length,
+        }
+      },
+      overdueContacts(days) {
+        return overdueContacts(dataRef.current.pipeline, todayISO(), days)
+      },
+      newJobs() {
+        return (dataRef.current.jobs || []).filter((j) => j.isNew).map((j) => ({ type: j.type, role: j.role, company: j.company }))
+      },
+    }
+    return () => {
+      delete window.zwartboek
+    }
+  }, [loaded])
 
   // Debounced save of changed keys
   function scheduleSave(next) {
@@ -513,6 +559,7 @@ export default function App() {
               icon={n.icon}
               label={n.label}
               count={n.count(data)}
+              fresh={n.fresh ? n.fresh(data) : 0}
             />
           ))}
         </nav>
@@ -625,11 +672,12 @@ export default function App() {
   )
 }
 
-function NavItem({ active, onClick, icon, label, count }) {
+function NavItem({ active, onClick, icon, label, count, fresh }) {
   return (
     <button className={'nav-item' + (active ? ' active' : '')} onClick={onClick}>
       <span className="nav-icon">{icon}</span>
       <span className="nav-label">{label}</span>
+      {fresh > 0 && <span className="nav-new" title={`${fresh} new from sweep`}>{fresh} new</span>}
       {count > 0 && <span className="nav-count">{count}</span>}
     </button>
   )
@@ -1942,6 +1990,7 @@ function JobsView({ kind, records, onNew, onOpen, onPatch, onDelete }) {
   const passed = visible.filter((j) => j.outcome === 'passed').sort(sorter)
   const closed = visible.filter((j) => j.outcome === 'closed').sort(sorter)
   const stale = active.filter((j) => isNoReply(j, today)).length
+  const fresh = mine.filter((j) => j.isNew)
 
   function clickHeader(col) {
     if (!col.sortable) return
@@ -1973,6 +2022,13 @@ function JobsView({ kind, records, onNew, onOpen, onPatch, onDelete }) {
           <h1>{kind} Jobs</h1>
           <p className="muted">
             {mine.filter((j) => !j.outcome).length} open
+            {fresh.length > 0 && (
+              <>
+                {' · '}
+                <span className="new-count">{fresh.length} new from sweep</span>{' '}
+                <button className="link inline" onClick={() => fresh.forEach((j) => onPatch({ ...j, isNew: false }))}>mark all seen</button>
+              </>
+            )}
             {stale > 0 && <span className="overdue"> · {stale} with no reply in {NO_REPLY_DAYS}+ days</span>}
             {sort && (
               <>
@@ -2042,6 +2098,11 @@ function JobRow({ j, today, onOpen, onPatch, onDelete }) {
       </td>
       <td className="col-role">
         <button className="name-btn" onClick={() => onOpen(j)} title="Open full details">{j.role || 'Untitled role'}</button>
+        {j.isNew && (
+          <button className="badge-new" title="Found by a sweep — click to mark as seen" onClick={() => patch({ isNew: false })}>
+            NEW
+          </button>
+        )}
       </td>
       <td className="col-location">
         <DraftField value={j.location} placeholder="Location…" onCommit={(v) => patch({ location: v })} />
@@ -2050,7 +2111,7 @@ function JobRow({ j, today, onOpen, onPatch, onDelete }) {
         <DraftField value={j.sector} placeholder="Sector…" onCommit={(v) => patch({ sector: v })} />
       </td>
       <td className="col-status">
-        <select className={'stage-select ' + stageClass(j.status)} value={j.status || ''} onChange={(e) => patch({ status: e.target.value })}>
+        <select className={'stage-select ' + stageClass(j.status)} value={j.status || ''} onChange={(e) => patch({ status: e.target.value, isNew: false })}>
           {!JOB_STATUS.includes(j.status) && <option value={j.status || ''}>{j.status || '—'}</option>}
           {JOB_STATUS.map((s) => <option key={s}>{s}</option>)}
         </select>
@@ -2076,10 +2137,10 @@ function JobRow({ j, today, onOpen, onPatch, onDelete }) {
           <button className="mini" onClick={() => patch({ outcome: '', outcomeAt: '' })}>Reopen</button>
         ) : (
           <>
-            <button className="mini btn-pass" title="Chose not to apply" onClick={() => patch({ outcome: 'passed', outcomeAt: new Date().toISOString() })}>
+            <button className="mini btn-pass" title="Chose not to apply" onClick={() => patch({ outcome: 'passed', outcomeAt: new Date().toISOString(), isNew: false })}>
               Pass
             </button>
-            <button className="mini btn-close" title="Heard back / rejected" onClick={() => patch({ outcome: 'closed', outcomeAt: new Date().toISOString() })}>
+            <button className="mini btn-close" title="Heard back / rejected" onClick={() => patch({ outcome: 'closed', outcomeAt: new Date().toISOString(), isNew: false })}>
               Close
             </button>
           </>

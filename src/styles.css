@@ -358,3 +358,9 @@ textarea { resize: vertical; }
 .row-actions { text-align: right; }
 .row-actions .mini { margin-left: 4px; }
 .seg + .btn, .btn + .seg { margin-left: 0; }
+
+/* Sweep: new-job markers */
+.badge-new { display: inline-block; margin-left: 6px; border: 0; background: var(--accent); color: #fff; font-size: 9px; font-weight: 800; letter-spacing: .06em; padding: 2px 6px; border-radius: 4px; vertical-align: 2px; }
+.badge-new:hover { background: #a63621; }
+.new-count { color: var(--accent); font-weight: 600; }
+.nav-new { font-size: 10px; font-weight: 700; background: var(--accent); color: #fff; padding: 1px 6px; border-radius: 10px; margin-right: 4px; }
