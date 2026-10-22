@@ -546,7 +546,7 @@ export default function App() {
           <div className="brand-mark">PZ</div>
           <div>
             <div className="brand-name">Productie Zwartboek</div>
-            <div className="brand-sub">Freelance CRM</div>
+            <div className="brand-sub">Jurrien Verhagen · freelance CRM</div>
           </div>
         </div>
         <nav>
@@ -677,7 +677,7 @@ function NavItem({ active, onClick, icon, label, count, fresh }) {
     <button className={'nav-item' + (active ? ' active' : '')} onClick={onClick}>
       <span className="nav-icon">{icon}</span>
       <span className="nav-label">{label}</span>
-      {fresh > 0 && <span className="nav-new" title={`${fresh} new from sweep`}>{fresh} new</span>}
+      {fresh > 0 && <span className="nav-new" title={`${fresh} new from sweep`}>+{fresh}</span>}
       {count > 0 && <span className="nav-count">{count}</span>}
     </button>
   )
