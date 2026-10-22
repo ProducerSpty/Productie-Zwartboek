@@ -5,7 +5,20 @@ import { loadAll, saveKey } from './supabase.js'
 /*  Section definitions — each one is stored as a JSON array under key */
 /* ------------------------------------------------------------------ */
 
-const PIPELINE_STAGES = ['Lead', 'Contacted', 'Meeting', 'Proposal', 'Negotiating', 'Won', 'Lost']
+const PIPELINE_STAGES = ['Radar', 'Reached out to me', 'Replied', 'Won', 'Archived']
+// Stages from the first version of the app, mapped onto the new ones on load
+const LEGACY_STAGES = { Lead: 'Radar', Contacted: 'Replied', Meeting: 'Replied', Proposal: 'Replied', Negotiating: 'Replied', Lost: 'Archived' }
+function migratePipeline(list) {
+  let changed = false
+  const out = (list || []).map((r) => {
+    if (LEGACY_STAGES[r.stage]) {
+      changed = true
+      return { ...r, stage: LEGACY_STAGES[r.stage] }
+    }
+    return r
+  })
+  return { list: out, changed }
+}
 const OUTREACH_STATUS = ['Target', 'Researching', 'Reached out', 'In conversation', 'Worked with', 'Not a fit']
 const PRIORITY = ['High', 'Medium', 'Low']
 const JOB_STATUS = ['Found', 'Applied', 'Interview', 'Offer', 'Accepted', 'Rejected', 'Passed']
@@ -24,14 +37,15 @@ const SECTIONS = {
       { key: 'name', label: 'Name', required: true },
       { key: 'company', label: 'Company' },
       { key: 'role', label: 'Their role' },
-      { key: 'stage', label: 'Stage', type: 'select', options: PIPELINE_STAGES, default: 'Lead' },
+      { key: 'stage', label: 'Stage', type: 'select', options: PIPELINE_STAGES, default: 'Radar' },
+      { key: 'lastContact', label: 'Last contact', type: 'date' },
       { key: 'email', label: 'Email', type: 'email' },
       { key: 'phone', label: 'Phone' },
       { key: 'linkedin', label: 'LinkedIn', type: 'url' },
       { key: 'source', label: 'Source', placeholder: 'Referral, festival, LinkedIn…' },
       { key: 'value', label: 'Est. value (€)', type: 'number' },
       { key: 'nextAction', label: 'Next action' },
-      { key: 'nextDate', label: 'Follow up on', type: 'date' },
+      { key: 'nextDate', label: 'Reminder', type: 'date' },
       { key: 'notes', label: 'Notes', type: 'textarea' },
     ],
     columns: ['name', 'company', 'stage', 'nextAction', 'nextDate', 'value'],
@@ -216,6 +230,12 @@ export default function App() {
         setData((d) => {
           const next = { ...d }
           for (const k of KEYS) if (Array.isArray(remote[k])) next[k] = remote[k]
+          const m = migratePipeline(next.pipeline)
+          next.pipeline = m.list
+          if (m.changed) {
+            dirty.current.add('pipeline')
+            scheduleSave(next)
+          }
           return next
         })
         setMeta({ lastSweep: remote.lastSweep || null })
@@ -224,7 +244,7 @@ export default function App() {
         console.error(e)
         try {
           const cached = JSON.parse(localStorage.getItem(LOCAL_CACHE) || '{}')
-          setData((d) => ({ ...d, ...cached }))
+          setData((d) => { const next = { ...d, ...cached }; next.pipeline = migratePipeline(next.pipeline).list; return next })
         } catch {}
         setSync('offline')
         setErrorMsg(e.message || String(e))
@@ -326,6 +346,16 @@ export default function App() {
             goTo={setTab}
             onOpen={(section, record) => setEditing({ section, record })}
             onNew={openNew}
+          />
+        ) : tab === 'pipeline' ? (
+          <PipelineView
+            records={data.pipeline || []}
+            onNew={(preset) => openNew('pipeline', preset)}
+            onOpen={(record) => setEditing({ section: 'pipeline', record })}
+            onPatch={(record) => upsert('pipeline', record)}
+            onDelete={(r) => {
+              if (confirm(`Delete ${r.name || 'this contact'}? This can't be undone.`)) remove('pipeline', r.id)
+            }}
           />
         ) : (
           <SectionView
@@ -459,7 +489,7 @@ function Overview({ data, meta, goTo, onOpen, onNew }) {
   const appliedJobs = jobs.filter((j) => ACTIVE_JOB_STATUSES.includes(j.status))
 
   // Agencies with a known contact but nothing active for them in the pipeline
-  const activePipeline = pipeline.filter((r) => !['Won', 'Lost'].includes(r.stage))
+  const activePipeline = pipeline.filter((r) => r.stage !== 'Archived')
   const activeCompanies = new Set(activePipeline.map((r) => normName(r.company)).filter(Boolean))
   const activeEmails = new Set(activePipeline.map((r) => String(r.email || '').toLowerCase()).filter(Boolean))
   const agenciesToReach = agencies
@@ -529,7 +559,7 @@ function Overview({ data, meta, goTo, onOpen, onNew }) {
                     company: a.name,
                     email: a.email || '',
                     source: 'Agencies list',
-                    stage: 'Lead',
+                    stage: 'Radar',
                   })
                 }
               >
@@ -923,4 +953,275 @@ function RecordModal({ def, record, onClose, onSave, onDelete }) {
       </form>
     </div>
   )
+}
+
+/* ------------------------------------------------------------------ */
+/*  Pipeline list                                                      */
+/* ------------------------------------------------------------------ */
+
+const PIPE_COLUMNS = [
+  { key: 'starred', label: '★', sortable: true },
+  { key: 'name', label: 'Name', sortable: true },
+  { key: 'company', label: 'Company', sortable: true },
+  { key: 'stage', label: 'Stage', sortable: true },
+  { key: 'lastContact', label: 'Last contact', sortable: true },
+  { key: 'nextDate', label: 'Next action', sortable: true },
+  { key: 'notes', label: 'Notes' },
+  { key: 'actions', label: '' },
+]
+
+// Default order: starred → overdue reminders (oldest first) → longest since last contact
+function smartPipelineSort(today) {
+  return (a, b) => {
+    const star = (b.starred ? 1 : 0) - (a.starred ? 1 : 0)
+    if (star) return star
+    const ao = !!a.nextDate && a.nextDate <= today
+    const bo = !!b.nextDate && b.nextDate <= today
+    if (ao !== bo) return ao ? -1 : 1
+    if (ao && bo && a.nextDate !== b.nextDate) return a.nextDate.localeCompare(b.nextDate)
+    // No last-contact date counts as "longest ago"
+    const al = a.lastContact || ''
+    const bl = b.lastContact || ''
+    if (al !== bl) return al.localeCompare(bl)
+    return String(a.name || '').localeCompare(String(b.name || ''))
+  }
+}
+
+function columnPipelineSort({ key, dir }) {
+  return (a, b) => {
+    let av = a[key]
+    let bv = b[key]
+    if (key === 'starred') return ((av ? 1 : 0) - (bv ? 1 : 0)) * dir
+    if (key === 'stage') return (PIPELINE_STAGES.indexOf(av) - PIPELINE_STAGES.indexOf(bv)) * dir
+    av = String(av || '')
+    bv = String(bv || '')
+    // Empty values always go last
+    if (!av && bv) return 1
+    if (av && !bv) return -1
+    return av.localeCompare(bv, undefined, { sensitivity: 'base' }) * dir
+  }
+}
+
+function daysAgoLabel(iso, today) {
+  if (!iso) return { text: 'never', cls: 'age-old' }
+  const n = daysBetween(iso, today)
+  if (n < 0) return { text: `in ${-n} day${n === -1 ? '' : 's'}`, cls: 'muted' }
+  if (n === 0) return { text: 'today', cls: 'age-fresh' }
+  if (n === 1) return { text: 'yesterday', cls: 'age-fresh' }
+  return { text: `${n} days ago`, cls: n > 30 ? 'age-old' : n > 14 ? 'age-mid' : 'muted' }
+}
+
+function PipelineView({ records, onNew, onOpen, onPatch, onDelete }) {
+  const today = todayISO()
+  const [query, setQuery] = useState('')
+  const [showArchived, setShowArchived] = useState(false)
+  const [sort, setSort] = useState(null) // null = smart sort
+
+  const q = query.trim().toLowerCase()
+  const matches = (r) =>
+    !q || [r.name, r.company, r.role, r.email, r.nextAction, r.notes].some((v) => String(v || '').toLowerCase().includes(q))
+
+  const sorter = sort ? columnPipelineSort(sort) : smartPipelineSort(today)
+  const visible = records.filter(matches)
+  const won = visible.filter((r) => r.stage === 'Won').sort(sorter)
+  const archived = visible.filter((r) => r.stage === 'Archived').sort(sorter)
+  const active = visible.filter((r) => r.stage !== 'Won' && r.stage !== 'Archived').sort(sorter)
+  const archivedTotal = records.filter((r) => r.stage === 'Archived').length
+  const overdue = active.filter((r) => r.nextDate && r.nextDate < today).length
+
+  function clickHeader(col) {
+    if (!col.sortable) return
+    setSort((s) => {
+      if (!s || s.key !== col.key) return { key: col.key, dir: col.key === 'starred' ? -1 : 1 }
+      if (s.dir === (col.key === 'starred' ? -1 : 1)) return { key: col.key, dir: -s.dir }
+      return null // third click returns to smart sort
+    })
+  }
+
+  const rowProps = { today, onOpen, onPatch, onDelete }
+  const sectionRow = (label, n, extra) => (
+    <tr className="section-row">
+      <td colSpan={PIPE_COLUMNS.length}>
+        {label} <span className="muted">· {n}</span> {extra}
+      </td>
+    </tr>
+  )
+
+  return (
+    <div className="page page-wide">
+      <header className="page-head">
+        <div>
+          <h1>Pipeline</h1>
+          <p className="muted">
+            {records.length - archivedTotal} active
+            {overdue > 0 && <span className="overdue"> · {overdue} overdue</span>}
+            {' · '}
+            {sort ? (
+              <>
+                sorted by {PIPE_COLUMNS.find((c) => c.key === sort.key)?.label.toLowerCase()}{' '}
+                <button className="link inline" onClick={() => setSort(null)}>reset to smart sort</button>
+              </>
+            ) : (
+              'starred, overdue, then longest since contact'
+            )}
+          </p>
+        </div>
+        <div className="toolbar">
+          <input className="search" placeholder="Search…" value={query} onChange={(e) => setQuery(e.target.value)} />
+          <label className="toggle">
+            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+            Show archived ({archivedTotal})
+          </label>
+          <button className="btn primary" onClick={() => onNew()}>+ New contact</button>
+        </div>
+      </header>
+
+      {records.length === 0 ? (
+        <div className="empty">
+          <p>No contacts yet.</p>
+          <button className="btn primary" onClick={() => onNew()}>Add the first one</button>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table className="pipe-table">
+            <thead>
+              <tr>
+                {PIPE_COLUMNS.map((c) => (
+                  <th
+                    key={c.key}
+                    className={'col-' + c.key + (c.sortable ? '' : ' nosort')}
+                    onClick={() => clickHeader(c)}
+                  >
+                    {c.label}
+                    {sort?.key === c.key && <span className="sort">{sort.dir === 1 ? ' ↑' : ' ↓'}</span>}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {won.length > 0 && sectionRow('Active bookings', won.length)}
+              {won.map((r) => <PipelineRow key={r.id} r={r} {...rowProps} />)}
+              {won.length > 0 && sectionRow('Pipeline', active.length)}
+              {active.map((r) => <PipelineRow key={r.id} r={r} {...rowProps} />)}
+              {active.length === 0 && (
+                <tr><td colSpan={PIPE_COLUMNS.length} className="muted small">{q ? 'No matches.' : 'No active contacts.'}</td></tr>
+              )}
+              {showArchived && archived.length > 0 && sectionRow('Archived', archived.length)}
+              {showArchived && archived.map((r) => <PipelineRow key={r.id} r={r} {...rowProps} />)}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PipelineRow({ r, today, onOpen, onPatch, onDelete }) {
+  const patch = (changes) => onPatch({ ...r, ...changes })
+  const age = daysAgoLabel(r.lastContact, today)
+  const isArchived = r.stage === 'Archived'
+  const reminderCls = !r.nextDate ? '' : r.nextDate < today ? 'overdue' : r.nextDate === today ? 'due-today' : 'muted'
+
+  return (
+    <tr className={'pipe-row' + (isArchived ? ' archived' : '') + (r.starred ? ' starred' : '')}>
+      <td className="col-starred">
+        <button
+          className={'star' + (r.starred ? ' on' : '')}
+          title={r.starred ? 'Unstar' : 'Star as priority'}
+          onClick={() => patch({ starred: !r.starred })}
+        >
+          {r.starred ? '★' : '☆'}
+        </button>
+      </td>
+      <td className="col-name">
+        <button className="name-btn" onClick={() => onOpen(r)} title="Open full details">
+          {r.name || 'Unnamed'}
+        </button>
+        {r.role && <div className="row-sub">{r.role}</div>}
+      </td>
+      <td className="col-company">{r.company}</td>
+      <td className="col-stage">
+        <select className={'stage-select ' + stageClass(r.stage)} value={r.stage || ''} onChange={(e) => patch({ stage: e.target.value })}>
+          {!PIPELINE_STAGES.includes(r.stage) && <option value={r.stage || ''}>{r.stage || '—'}</option>}
+          {PIPELINE_STAGES.map((s) => <option key={s}>{s}</option>)}
+        </select>
+      </td>
+      <td className="col-last">
+        <div className="last-wrap">
+          <input
+            type="date"
+            className="cell-date"
+            value={r.lastContact || ''}
+            onChange={(e) => patch({ lastContact: e.target.value })}
+          />
+          <div className="last-meta">
+            <span className={age.cls}>{age.text}</span>
+            {r.lastContact !== today && (
+              <button className="mini" title="Set last contact to today" onClick={() => patch({ lastContact: today })}>today</button>
+            )}
+          </div>
+        </div>
+      </td>
+      <td className="col-next">
+        <DraftField value={r.nextAction} placeholder="Next action…" onCommit={(v) => patch({ nextAction: v })} />
+        <div className="remind">
+          {r.nextDate ? (
+            <span className={reminderCls}>
+              {r.nextDate < today ? 'Overdue · ' : r.nextDate === today ? 'Today · ' : '⏰ '}
+              {fmtDate(r.nextDate)}
+              <button className="mini" title="Clear reminder" onClick={() => patch({ nextDate: '' })}>×</button>
+            </span>
+          ) : (
+            <span className="muted">No reminder</span>
+          )}
+          {[3, 7, 14].map((n) => (
+            <button key={n} className="mini" title={`Remind me on ${fmtDate(addDays(today, n))}`} onClick={() => patch({ nextDate: addDays(today, n) })}>
+              +{n}d
+            </button>
+          ))}
+        </div>
+      </td>
+      <td className="col-notes">
+        <DraftField multiline value={r.notes} placeholder="Notes…" onCommit={(v) => patch({ notes: v })} />
+      </td>
+      <td className="col-actions">
+        {isArchived ? (
+          <button
+            className="mini"
+            onClick={() => patch({ stage: r.prevStage && r.prevStage !== 'Archived' ? r.prevStage : 'Radar', prevStage: '' })}
+          >
+            Unarchive
+          </button>
+        ) : (
+          <button className="mini" onClick={() => patch({ stage: 'Archived', prevStage: r.stage })}>Archive</button>
+        )}
+        <button className="mini danger" onClick={() => onDelete(r)}>Delete</button>
+      </td>
+    </tr>
+  )
+}
+
+// Text field that saves on blur / Enter instead of on every keystroke
+function DraftField({ value, onCommit, multiline, placeholder }) {
+  const [v, setV] = useState(value || '')
+  useEffect(() => setV(value || ''), [value])
+  const commit = () => {
+    if ((value || '') !== v) onCommit(v)
+  }
+  const props = {
+    value: v,
+    placeholder,
+    onChange: (e) => setV(e.target.value),
+    onBlur: commit,
+    onKeyDown: (e) => {
+      if (e.key === 'Escape') {
+        setV(value || '')
+        e.currentTarget.blur()
+      } else if (e.key === 'Enter' && (!multiline || e.metaKey || e.ctrlKey)) {
+        e.preventDefault()
+        e.currentTarget.blur()
+      }
+    },
+  }
+  return multiline ? <textarea rows={2} className="cell-input cell-notes" {...props} /> : <input className="cell-input" {...props} />
 }
