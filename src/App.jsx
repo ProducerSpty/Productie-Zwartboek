@@ -69,12 +69,33 @@ function migrateJobs(list) {
   return { list: out, changed }
 }
 
+// Bookings from the first version used status (1st/2nd pencil, Confirmed, Released)
+function migrateBookings(list) {
+  let changed = false
+  const out = (list || []).map((r) => {
+    if (r.kind) return r
+    changed = true
+    const n = { ...r }
+    if (r.status === 'Confirmed') n.kind = 'Booking'
+    else {
+      n.kind = 'Pencil'
+      if (r.status === '1st pencil' || r.status === '2nd pencil') n.pencil = r.status
+      if (r.status === 'Released') n.released = true
+    }
+    return n
+  })
+  return { list: out, changed }
+}
+
 function migrateData(d) {
   const next = { ...d }
   const changed = []
   const p = migratePipeline(next.pipeline)
   next.pipeline = p.list
   if (p.changed) changed.push('pipeline')
+  const bk = migrateBookings(next.bookings)
+  next.bookings = bk.list
+  if (bk.changed) changed.push('bookings')
   const jobsM = migrateJobs(next.jobs)
   next.jobs = jobsM.list
   if (jobsM.changed) changed.push('jobs')
@@ -156,7 +177,9 @@ const JOB_STATUS = ['New', 'Researching', 'Applied', 'No Response', 'Conversatio
 const JOB_TYPES = ['Freelance', 'Contract']
 const LEGACY_JOB_STATUS = { Found: 'New', Interview: 'Conversation', Accepted: 'Offer', Passed: 'New' }
 const NO_REPLY_DAYS = 14
-const BOOKING_STATUS = ['1st pencil', '2nd pencil', 'Confirmed', 'Released']
+const BOOKING_STATUS = ['1st pencil', '2nd pencil', 'Confirmed', 'Released'] // first version, migrated to BOOKING_KINDS
+const BOOKING_KINDS = ['Booking', 'Pencil', 'Time Off']
+const isTimeOff = (form) => form.kind === 'Time Off'
 
 const SECTIONS = {
   pipeline: {
@@ -266,26 +289,26 @@ const SECTIONS = {
     columns: ['company', 'role', 'location', 'sector', 'priority', 'status', 'sourceUrl', 'dateAdded'],
   },
   bookings: {
-    label: 'Bookings',
-    singular: 'Booking',
+    label: 'Bookings & Pencils',
+    singular: 'entry',
     icon: '▦',
-    views: ['calendar', 'table'],
-    stageField: 'status',
+    views: ['table'],
+    stageField: 'kind',
     titleField: 'project',
     subtitle: (r) => [r.client, fmtRange(r.start, r.end)].filter(Boolean).join(' · '),
     fields: [
-      { key: 'project', label: 'Project', required: true },
-      { key: 'client', label: 'Client' },
-      { key: 'status', label: 'Status', type: 'select', options: BOOKING_STATUS, default: '1st pencil' },
+      { key: 'kind', label: 'Type', type: 'select', options: BOOKING_KINDS, default: 'Booking', required: true },
+      { key: 'project', label: (f) => (isTimeOff(f) ? 'Label (optional)' : 'Project'), required: (f) => !isTimeOff(f), placeholder: '' },
+      { key: 'client', label: 'Client / contact', hidden: isTimeOff },
       { key: 'start', label: 'Start', type: 'date', required: true },
       { key: 'end', label: 'End', type: 'date' },
-      { key: 'role', label: 'My role', placeholder: 'Post Producer' },
-      { key: 'location', label: 'Location' },
-      { key: 'rate', label: 'Day rate (€)', type: 'number' },
-      { key: 'invoiced', label: 'Invoiced', type: 'select', options: ['No', 'Sent', 'Paid'], default: 'No' },
+      { key: 'role', label: 'My role', placeholder: 'Post Producer', hidden: isTimeOff },
+      { key: 'location', label: 'Location', hidden: isTimeOff },
+      { key: 'rate', label: 'Day rate (€)', type: 'number', hidden: isTimeOff },
+      { key: 'invoiced', label: 'Invoiced', type: 'select', options: ['No', 'Sent', 'Paid'], default: 'No', hidden: isTimeOff },
       { key: 'notes', label: 'Notes', type: 'textarea' },
     ],
-    columns: ['project', 'client', 'status', 'start', 'end', 'rate', 'invoiced'],
+    columns: ['kind', 'project', 'client', 'start', 'end', 'rate', 'invoiced'],
   },
 }
 
@@ -298,7 +321,7 @@ const NAV = [
   { tab: 'crew', label: 'Rolodex', icon: '☺', count: (d) => (d.crew || []).length },
   { tab: 'jobs-freelance', label: 'Freelance Jobs', icon: '✦', count: (d) => openJobs(d, 'Freelance') },
   { tab: 'jobs-contract', label: 'Contract Jobs', icon: '✧', count: (d) => openJobs(d, 'Contract') },
-  { tab: 'bookings', label: 'Bookings', icon: '▦', count: (d) => (d.bookings || []).length },
+  { tab: 'bookings', label: 'Bookings & Pencils', icon: '▦', count: (d) => (d.bookings || []).filter((b) => !b.released && (b.end || b.start) >= todayISO()).length },
 ]
 const LOCAL_CACHE = 'zwartboek-cache-v1'
 
@@ -349,7 +372,13 @@ export default function App() {
   const [sync, setSync] = useState('loading') // loading | saved | saving | offline | error
   const [errorMsg, setErrorMsg] = useState('')
   const [tab, setTab] = useState('overview')
-  const [meta, setMeta] = useState({ lastSweep: null }) // non-section keys, e.g. lastSweep
+  const [meta, setMeta] = useState({ lastSweep: null, bookingYears: [] }) // non-section keys
+
+  function addBookingYear(y) {
+    const years = [...new Set([...(meta.bookingYears || []), y])].sort()
+    setMeta((m) => ({ ...m, bookingYears: years }))
+    saveKey('bookingYears', years).catch((e) => console.error(e))
+  }
   const [editing, setEditing] = useState(null) // { section, record }
   const dirty = useRef(new Set())
   const timer = useRef(null)
@@ -371,7 +400,7 @@ export default function App() {
           }
           return m.next
         })
-        setMeta({ lastSweep: remote.lastSweep || null })
+        setMeta({ lastSweep: remote.lastSweep || null, bookingYears: Array.isArray(remote.bookingYears) ? remote.bookingYears : [] })
         setSync('saved')
       } catch (e) {
         console.error(e)
@@ -523,6 +552,15 @@ export default function App() {
               if (confirm(`Delete ${r.role || 'this job'}${r.company ? ' at ' + r.company : ''}?`)) remove('jobs', r.id)
             }}
           />
+        ) : tab === 'bookings' ? (
+          <BookingsView
+            records={data.bookings || []}
+            savedYears={meta.bookingYears || []}
+            onAddYear={addBookingYear}
+            onNew={(preset) => openNew('bookings', preset)}
+            onOpen={(record) => setEditing({ section: 'bookings', record })}
+            onPatch={(record) => upsert('bookings', record)}
+          />
         ) : tab === 'crew' ? (
           <RolodexView
             def={SECTIONS.crew}
@@ -638,31 +676,33 @@ function lastSweepJobs(jobs, lastSweep) {
 }
 
 function availability(bookings, today) {
-  const live = bookings.filter((b) => b.start && b.status !== 'Released')
+  const live = bookings.filter((b) => b.start && !b.released && b.kind !== 'Time Off')
   const endOf = (b) => b.end || b.start
+  const name = (b) => b.project || b.kind
   const latest = [...live].sort((a, b) => endOf(a).localeCompare(endOf(b))).pop()
+  const offNow = bookings.find((b) => b.kind === 'Time Off' && b.start <= today && (b.end || b.start) >= today)
   if (!latest || endOf(latest) < today) {
     return {
-      free: true,
-      headline: 'Available now',
-      detail: latest ? `Last booking (${latest.project}) ended ${fmtDate(endOf(latest))}.` : 'No bookings in the calendar.',
+      free: !offNow,
+      tentative: !!offNow,
+      headline: offNow ? `Time off until ${fmtDate(endOf(offNow))}` : 'Available now',
+      detail: latest ? `Last booking (${name(latest)}) ended ${fmtDate(endOf(latest))}.` : 'No bookings in the calendar.',
     }
   }
-  const latestConfirmed = live
-    .filter((b) => b.status === 'Confirmed')
+  const latestBooking = live
+    .filter((b) => b.kind === 'Booking')
     .sort((a, b) => endOf(a).localeCompare(endOf(b)))
     .pop()
   const current = live.find((b) => b.start <= today && endOf(b) >= today)
   const freeFrom = addDays(endOf(latest), 1)
-  let detail = `Latest booking: ${latest.project}${latest.client ? ` (${latest.client})` : ''}, ends ${fmtDate(endOf(latest))}`
-  if (latest.status !== 'Confirmed') {
-    detail += ` — ${latest.status}`
-    if (latestConfirmed && endOf(latestConfirmed) >= today) detail += `. Confirmed work runs until ${fmtDate(endOf(latestConfirmed))}`
-    else detail += '. No confirmed work ahead'
+  let detail = `Latest ${latest.kind === 'Pencil' ? 'pencil' : 'booking'}: ${name(latest)}${latest.client ? ` (${latest.client})` : ''}, ends ${fmtDate(endOf(latest))}`
+  if (latest.kind !== 'Booking') {
+    if (latestBooking && endOf(latestBooking) >= today) detail += `. Confirmed bookings run until ${fmtDate(endOf(latestBooking))}`
+    else detail += '. No confirmed bookings ahead'
   }
   return {
     free: false,
-    tentative: latest.status !== 'Confirmed',
+    tentative: latest.kind !== 'Booking',
     headline: current ? `Booked — available from ${fmtDate(freeFrom)}` : `Available from ${fmtDate(freeFrom)}`,
     detail: detail + '.',
   }
@@ -699,7 +739,7 @@ function Overview({ data, meta, goTo, onOpen, onNew }) {
     .sort((a, b) => a.nextDate.localeCompare(b.nextDate))
 
   const upcoming = bookings
-    .filter((b) => b.start && b.status !== 'Released' && (b.end || b.start) >= today)
+    .filter((b) => b.start && !b.released && (b.end || b.start) >= today)
     .sort((a, b) => a.start.localeCompare(b.start))
     .slice(0, 6)
 
@@ -811,7 +851,7 @@ function Overview({ data, meta, goTo, onOpen, onNew }) {
             <Row key={b.id} onClick={() => onOpen('bookings', b)}
               title={b.project}
               sub={[b.client, fmtRange(b.start, b.end)].filter(Boolean).join(' · ')}
-              right={<span className={stageClass(b.status)}>{b.status}</span>}
+              right={<span className={stageClass(b.kind)}>{b.kind}</span>}
             />
           ))}
         </Panel>
@@ -1117,13 +1157,16 @@ function RecordModal({ def, record, onClose, onSave, onDelete }) {
 
   function submit(e) {
     e.preventDefault()
-    const missing = def.fields.filter((f) => f.required && !String(form[f.key] ?? '').trim())
-    if (missing.length) return setErr(`Please fill in: ${missing.map((f) => f.label).join(', ')}`)
+    const missing = shown.filter((f) => isRequired(f) && !String(form[f.key] ?? '').trim())
+    if (missing.length) return setErr(`Please fill in: ${missing.map((f) => labelOf(f)).join(', ')}`)
     if (form.start && form.end && form.end < form.start) return setErr('End date is before start date.')
     onSave(form)
   }
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+  const labelOf = (f) => (typeof f.label === 'function' ? f.label(form) : f.label)
+  const isRequired = (f) => (typeof f.required === 'function' ? f.required(form) : !!f.required)
+  const shown = def.fields.filter((f) => !(f.hidden && f.hidden(form)))
 
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -1133,9 +1176,9 @@ function RecordModal({ def, record, onClose, onSave, onDelete }) {
           <button type="button" className="x" onClick={onClose}>×</button>
         </div>
         <div className="form-grid">
-          {def.fields.map((f) => (
+          {shown.map((f) => (
             <label key={f.key} className={f.type === 'textarea' ? 'full' : ''}>
-              <span>{f.label}{f.required && ' *'}</span>
+              <span>{labelOf(f)}{isRequired(f) && ' *'}</span>
               {f.type === 'stars' ? (
                 <StarRating value={form[f.key]} onChange={(v) => set(f.key, v)} />
               ) : f.type === 'select' ? (
@@ -2044,5 +2087,286 @@ function JobRow({ j, today, onOpen, onPatch, onDelete }) {
         <button className="mini danger" onClick={() => onDelete(j)}>Delete</button>
       </td>
     </tr>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  Bookings & Pencils — year Gantt                                    */
+/* ------------------------------------------------------------------ */
+
+const KIND_LANES = [
+  { kind: 'Booking', label: 'Bookings', cls: 'bar-booking' },
+  { kind: 'Pencil', label: 'Pencils', cls: 'bar-pencil' },
+  { kind: 'Time Off', label: 'Time off', cls: 'bar-timeoff' },
+]
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const ZOOMS = [
+  { label: 'Year', dw: 'fit' },
+  { label: 'M', dw: 6 },
+  { label: 'L', dw: 12 },
+]
+
+// Put overlapping entries on separate rows within a lane
+function packRows(items) {
+  const rows = []
+  for (const it of items) {
+    const end = it.end || it.start
+    let row = rows.find((r) => r.lastEnd < it.start)
+    if (!row) {
+      row = { lastEnd: '', items: [] }
+      rows.push(row)
+    }
+    row.items.push(it)
+    row.lastEnd = end
+  }
+  return rows.length ? rows : [{ lastEnd: '', items: [] }]
+}
+
+function BookingsView({ records, savedYears, onAddYear, onNew, onOpen, onPatch }) {
+  const today = todayISO()
+  const thisYear = Number(today.slice(0, 4))
+  const [year, setYear] = useState(thisYear)
+  const [zoom, setZoom] = useState('fit')
+  const [boxW, setBoxW] = useState(0)
+  const [showReleased, setShowReleased] = useState(false)
+  const scroller = useRef(null)
+
+  const years = useMemo(() => {
+    const ys = new Set([thisYear, ...savedYears.map(Number)])
+    for (const b of records) {
+      if (!b.start) continue
+      const a = Number(b.start.slice(0, 4))
+      const z = Number((b.end || b.start).slice(0, 4))
+      for (let y = a; y <= z; y++) ys.add(y)
+    }
+    return [...ys].filter(Boolean).sort((a, b) => a - b)
+  }, [records, savedYears, thisYear])
+
+  const yStart = `${year}-01-01`
+  const yEnd = `${year}-12-31`
+  const nDays = daysBetween(yStart, yEnd) + 1
+
+  // Track the visible width so the 'Year' zoom fits all twelve months on screen
+  useEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    const update = () => setBoxW(el.clientWidth)
+    update()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const dw = zoom === 'fit' ? Math.max(1.5, (boxW || 1000) / nDays) : zoom
+  const width = nDays * dw
+  const idx = (iso) => daysBetween(yStart, iso)
+  const todayIdx = year === thisYear ? idx(today) : -1
+
+  const inYear = records
+    .filter((b) => b.start && b.start <= yEnd && (b.end || b.start) >= yStart)
+    .sort((a, b) => a.start.localeCompare(b.start) || (a.end || a.start).localeCompare(b.end || b.start))
+  const onChart = inYear.filter((b) => !b.released)
+
+  // Scroll so today (or January) is in view when the year or zoom changes
+  useEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    el.scrollLeft = todayIdx >= 0 ? Math.max(0, todayIdx * dw - el.clientWidth / 3) : 0
+  }, [year, zoom]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const daysIn = (kind) =>
+    onChart
+      .filter((b) => b.kind === kind)
+      .reduce((s, b) => {
+        const a = b.start < yStart ? yStart : b.start
+        const z = (b.end || b.start) > yEnd ? yEnd : b.end || b.start
+        return s + daysBetween(a, z) + 1
+      }, 0)
+
+  // Month header and Monday ticks
+  const months = MONTHS.map((m, i) => {
+    const first = `${year}-${String(i + 1).padStart(2, '0')}-01`
+    const next = i === 11 ? `${year + 1}-01-01` : `${year}-${String(i + 2).padStart(2, '0')}-01`
+    return { label: m, left: idx(first) * dw, width: daysBetween(first, next) * dw, current: year === thisYear && today.slice(5, 7) === first.slice(5, 7) }
+  })
+  const firstDow = new Date(yStart + 'T00:00:00').getDay() // 0 = Sunday
+  const firstMonday = (8 - firstDow) % 7
+  const mondays = []
+  for (let d = firstMonday; d < nDays; d += 7) mondays.push(d)
+  const satOffset = ((6 - firstDow + 7) % 7) * dw // where the first Saturday starts
+  const gridStyle = {
+    width,
+    '--dw': dw + 'px',
+    backgroundImage: dw < 4 ? 'none' : `repeating-linear-gradient(to right, transparent 0, transparent ${5 * dw}px, var(--weekend) ${5 * dw}px, var(--weekend) ${7 * dw}px)`,
+    backgroundPosition: `${satOffset - 5 * dw}px 0`,
+  }
+
+  function clickTrack(e, kind) {
+    if (e.target !== e.currentTarget) return
+    const x = e.clientX - e.currentTarget.getBoundingClientRect().left
+    const d = addDays(yStart, Math.max(0, Math.min(nDays - 1, Math.floor(x / dw))))
+    onNew({ kind, start: d, end: kind === 'Time Off' ? d : addDays(d, 4) })
+  }
+
+  return (
+    <div className="page page-wide">
+      <header className="page-head">
+        <div>
+          <h1>Bookings & Pencils</h1>
+          <p className="muted">
+            {year}: <b className="k-booking">{daysIn('Booking')}</b> booked · <b className="k-pencil">{daysIn('Pencil')}</b> pencilled ·{' '}
+            <b className="k-timeoff">{daysIn('Time Off')}</b> off (days)
+          </p>
+        </div>
+        <div className="toolbar">
+          <div className="seg">
+            {years.map((y) => (
+              <button key={y} className={y === year ? 'on' : ''} onClick={() => setYear(y)}>{y}</button>
+            ))}
+          </div>
+          <button
+            className="btn"
+            onClick={() => {
+              const y = Math.max(...years) + 1
+              onAddYear(y)
+              setYear(y)
+            }}
+          >
+            + New Year
+          </button>
+          <div className="seg" title="Zoom: whole year, or closer">
+            {ZOOMS.map((z) => (
+              <button key={z.label} className={zoom === z.dw ? 'on' : ''} onClick={() => setZoom(z.dw)}>{z.label}</button>
+            ))}
+          </div>
+          <button className="btn primary" onClick={() => onNew({ kind: 'Booking', start: year === thisYear ? today : yStart })}>+ New</button>
+        </div>
+      </header>
+
+      <div className="gantt">
+        <div className="gantt-labels">
+          <div className="gantt-head-spacer" style={{ height: dw >= 6 ? 53 : 29 }} />
+          {KIND_LANES.map((lane) => {
+            const rows = packRows(onChart.filter((b) => b.kind === lane.kind))
+            return (
+              <div key={lane.kind} className="gantt-label" style={{ height: rows.length * 34 + 12 }}>
+                <span className={'lane-swatch ' + lane.cls} /> {lane.label}
+              </div>
+            )
+          })}
+        </div>
+        <div className="gantt-scroll" ref={scroller}>
+          <div className="gantt-inner" style={{ width }}>
+            <div className="gantt-months">
+              {months.map((m) => (
+                <div key={m.label} className={'gantt-month' + (m.current ? ' current' : '')} style={{ left: m.left, width: m.width }}>
+                  {m.label}
+                </div>
+              ))}
+            </div>
+            {dw >= 6 && (
+              <div className="gantt-days">
+                {mondays.map((d) => (
+                  <span key={d} className="gantt-tick" style={{ left: d * dw }}>
+                    {Number(addDays(yStart, d).slice(8))}
+                  </span>
+                ))}
+              </div>
+            )}
+            {KIND_LANES.map((lane) => {
+              const rows = packRows(onChart.filter((b) => b.kind === lane.kind))
+              return (
+                <div
+                  key={lane.kind}
+                  className="gantt-lane"
+                  style={{ ...gridStyle, height: rows.length * 34 + 12 }}
+                  onClick={(e) => clickTrack(e, lane.kind)}
+                  title={`Click to add ${lane.kind === 'Time Off' ? 'time off' : 'a ' + lane.kind.toLowerCase()}`}
+                >
+                  {months.map((m) => <span key={m.label} className="gantt-monthline" style={{ left: m.left }} />)}
+                  {rows.map((row, ri) =>
+                    row.items.map((b) => {
+                      const a = Math.max(0, idx(b.start))
+                      const z = Math.min(nDays - 1, idx(b.end || b.start))
+                      const days = daysBetween(b.start, b.end || b.start) + 1
+                      const label = b.project || (b.kind === 'Time Off' ? 'Time off' : 'Untitled')
+                      return (
+                        <button
+                          key={b.id}
+                          className={'gantt-bar ' + lane.cls}
+                          style={{ left: a * dw, width: Math.max(dw, (z - a + 1) * dw), top: 8 + ri * 34 }}
+                          onClick={() => onOpen(b)}
+                          title={`${label}${b.client ? ' — ' + b.client : ''}\n${fmtRange(b.start, b.end)} (${days} day${days === 1 ? '' : 's'})${b.pencil ? '\n' + b.pencil : ''}`}
+                        >
+                          <span>{label}</span>
+                        </button>
+                      )
+                    })
+                  )}
+                  {todayIdx >= 0 && <span className="gantt-today" style={{ left: todayIdx * dw + dw / 2 }} />}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+      <p className="muted small">Click an empty spot in a lane to add an entry there · click a bar to edit it · hover a bar for details · zoom in with M / L.</p>
+
+      <div className="panel-head list-head">
+        <h3>{year} entries</h3>
+        {inYear.some((b) => b.released) && (
+          <label className="toggle">
+            <input type="checkbox" checked={showReleased} onChange={(e) => setShowReleased(e.target.checked)} />
+            Show released pencils
+          </label>
+        )}
+      </div>
+      {inYear.length === 0 ? (
+        <div className="empty small">Nothing in {year} yet.</div>
+      ) : (
+        <div className="table-wrap">
+          <table className="booking-table">
+            <thead>
+              <tr>
+                <th>Type</th><th>Project / label</th><th>Client</th><th>Dates</th><th>Days</th><th>Rate</th><th>Invoiced</th><th />
+              </tr>
+            </thead>
+            <tbody>
+              {inYear
+                .filter((b) => showReleased || !b.released)
+                .map((b) => {
+                  const days = daysBetween(b.start, b.end || b.start) + 1
+                  return (
+                    <tr key={b.id} onClick={() => onOpen(b)} className={b.released ? 'archived' : ''}>
+                      <td><span className={stageClass(b.kind)}>{b.released ? 'Released' : b.kind}</span></td>
+                      <td>{b.project || <span className="muted">{b.kind === 'Time Off' ? 'Time off' : '—'}</span>}</td>
+                      <td>{b.kind === 'Time Off' ? '' : b.client}</td>
+                      <td>{fmtRange(b.start, b.end)}</td>
+                      <td>{days}</td>
+                      <td>{b.kind === 'Time Off' ? '' : fmtMoney(b.rate)}</td>
+                      <td>{b.kind === 'Time Off' ? '' : b.invoiced}</td>
+                      <td className="row-actions" onClick={(e) => e.stopPropagation()}>
+                        {b.kind === 'Pencil' && !b.released && (
+                          <button className="mini" title="Turn this pencil into a confirmed booking" onClick={() => onPatch({ ...b, kind: 'Booking', pencil: '' })}>
+                            Confirm
+                          </button>
+                        )}
+                        {b.kind === 'Pencil' && !b.released && (
+                          <button className="mini" title="Release this pencil (hides it from the chart)" onClick={() => onPatch({ ...b, released: true })}>
+                            Release
+                          </button>
+                        )}
+                        {b.released && (
+                          <button className="mini" onClick={() => onPatch({ ...b, released: false })}>Restore</button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   )
 }

@@ -319,3 +319,42 @@ textarea { resize: vertical; }
 .section-note { text-transform: none; letter-spacing: 0; font-weight: 400; }
 .badge-noreply { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px; background: #f3e1de; color: #9b3a2a; white-space: nowrap; }
 .small-badge { margin-top: 5px; font-size: 10px; }
+
+/* Bookings & Pencils — Gantt */
+:root { --weekend: rgba(0,0,0,.035); --booking: #2f8a57; --pencil: #d39b2a; --timeoff: #5457c9; }
+.tag-booking { background: #dff1e6; color: #1f6e43; }
+.tag-pencil { background: #fbf0d9; color: #7a540e; }
+.tag-time-off { background: #e6e6fa; color: #3d3fa8; }
+.k-booking { color: var(--booking); }
+.k-pencil { color: #a8771a; }
+.k-timeoff { color: var(--timeoff); }
+.gantt { display: flex; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-bottom: 8px; }
+.gantt-labels { flex-shrink: 0; width: 120px; border-right: 1px solid var(--line); background: #faf9f6; }
+.gantt-head-spacer { border-bottom: 1px solid var(--line); box-sizing: border-box; }
+.gantt-label { display: flex; align-items: flex-start; gap: 8px; padding: 14px 12px 0; font-size: 12px; font-weight: 600; border-bottom: 1px solid var(--line); box-sizing: border-box; }
+.gantt-label:last-child { border-bottom: 0; }
+.lane-swatch { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; margin-top: 1px; }
+.gantt-scroll { flex: 1; overflow-x: auto; overflow-y: hidden; }
+.gantt-inner { position: relative; }
+.gantt-months { position: relative; height: 28px; border-bottom: 1px solid var(--line); }
+.gantt-month { position: absolute; top: 0; height: 28px; line-height: 28px; padding-left: 6px; font-size: 12px; font-weight: 600; color: var(--muted); border-left: 1px solid var(--line); box-sizing: border-box; overflow: hidden; white-space: nowrap; }
+.gantt-month.current { color: var(--accent); }
+.gantt-days { position: relative; height: 24px; border-bottom: 1px solid var(--line); }
+.gantt-tick { position: absolute; top: 0; height: 24px; line-height: 24px; font-size: 10px; color: #a29d95; padding-left: 3px; border-left: 1px solid #efece6; }
+.gantt-lane { position: relative; border-bottom: 1px solid var(--line); cursor: copy; box-sizing: border-box; }
+.gantt-lane:last-child { border-bottom: 0; }
+.gantt-monthline { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); pointer-events: none; }
+.gantt-today { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); pointer-events: none; z-index: 0; opacity: .8; }
+.gantt-bar { position: absolute; height: 26px; border-radius: 5px; padding: 0 6px; font-size: 11px; font-weight: 600; text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; z-index: 1; box-sizing: border-box; display: flex; align-items: center; }
+.gantt-bar span { overflow: hidden; text-overflow: ellipsis; }
+.gantt-bar:hover { filter: brightness(1.06); box-shadow: 0 2px 8px rgba(0,0,0,.15); z-index: 3; }
+.bar-booking { background: var(--booking); border: 1px solid #267349; color: #fff; }
+.bar-pencil { background: #fdf3dc; border: 2px dashed var(--pencil); color: #7a540e; }
+.bar-timeoff { background: var(--timeoff); border: 1px solid #4245ad; color: #fff; }
+.lane-swatch.bar-pencil { border-width: 2px; }
+.list-head { padding: 22px 0 10px; }
+.booking-table td { white-space: nowrap; }
+.booking-table tr.archived { opacity: .55; }
+.row-actions { text-align: right; }
+.row-actions .mini { margin-left: 4px; }
+.seg + .btn, .btn + .seg { margin-left: 0; }
