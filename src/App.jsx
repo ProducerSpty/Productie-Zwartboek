@@ -50,12 +50,34 @@ function migrateCrew(list) {
   return { list: out, changed }
 }
 
+// Jobs from the first version: title/link/old statuses/other contract types
+function migrateJobs(list) {
+  let changed = false
+  const out = (list || []).map((r) => {
+    const n = { ...r }
+    if (!n.role && n.title) n.role = n.title
+    if (!n.sourceUrl && n.link) n.sourceUrl = n.link
+    if (n.status === 'Passed' && !n.outcome) n.outcome = 'passed'
+    if (LEGACY_JOB_STATUS[n.status]) n.status = LEGACY_JOB_STATUS[n.status]
+    if (!JOB_TYPES.includes(n.type)) n.type = n.type === 'Freelance' || !n.type ? 'Freelance' : 'Contract'
+    if (!n.dateAdded) n.dateAdded = n.createdAt ? localISO(new Date(n.createdAt)) : todayISO()
+    if (!n.statusChangedAt) n.statusChangedAt = n.appliedOn ? new Date(n.appliedOn + 'T12:00:00').toISOString() : n.updatedAt || n.createdAt || new Date().toISOString()
+    if (typeof n.priority !== 'number') n.priority = Number(n.priority) || 0
+    if (JSON.stringify(n) !== JSON.stringify(r)) changed = true
+    return n
+  })
+  return { list: out, changed }
+}
+
 function migrateData(d) {
   const next = { ...d }
   const changed = []
   const p = migratePipeline(next.pipeline)
   next.pipeline = p.list
   if (p.changed) changed.push('pipeline')
+  const jobsM = migrateJobs(next.jobs)
+  next.jobs = jobsM.list
+  if (jobsM.changed) changed.push('jobs')
   const crew = migrateCrew(next.crew)
   next.crew = crew.list
   if (crew.changed) changed.push('crew')
@@ -130,7 +152,10 @@ const AGENCY_STATUS = ['Target', 'Researching', 'In Warm Leads', 'Reached out', 
 const WARMABLE_STATUS = ['', 'Target', 'Researching', 'Not a fit']
 const LEGACY_PRIORITY = { High: 5, Medium: 3, Low: 1 }
 const CURRENCIES = ['€', '£', '$']
-const JOB_STATUS = ['Found', 'Applied', 'Interview', 'Offer', 'Accepted', 'Rejected', 'Passed']
+const JOB_STATUS = ['New', 'Researching', 'Applied', 'No Response', 'Conversation', 'Offer', 'Rejected']
+const JOB_TYPES = ['Freelance', 'Contract']
+const LEGACY_JOB_STATUS = { Found: 'New', Interview: 'Conversation', Accepted: 'Offer', Passed: 'New' }
+const NO_REPLY_DAYS = 14
 const BOOKING_STATUS = ['1st pencil', '2nd pencil', 'Confirmed', 'Released']
 
 const SECTIONS = {
@@ -222,24 +247,23 @@ const SECTIONS = {
     label: 'Jobs',
     singular: 'Job',
     icon: '✦',
-    views: ['board', 'table'],
+    views: ['table'],
     stageField: 'status',
-    titleField: 'title',
+    titleField: 'role',
     subtitle: (r) => [r.company, r.location].filter(Boolean).join(' · '),
     fields: [
-      { key: 'title', label: 'Job title', required: true },
       { key: 'company', label: 'Company' },
-      { key: 'type', label: 'Type', type: 'select', options: ['Freelance', 'Contract', 'Fixed-term', 'Permanent'], default: 'Freelance' },
-      { key: 'status', label: 'Status', type: 'select', options: JOB_STATUS, default: 'Found' },
+      { key: 'role', label: 'Role', required: true },
+      { key: 'type', label: 'Type', type: 'select', options: JOB_TYPES, default: 'Freelance' },
       { key: 'location', label: 'Location', placeholder: 'Amsterdam / Remote…' },
-      { key: 'rate', label: 'Rate / salary' },
-      { key: 'source', label: 'Found via' },
-      { key: 'link', label: 'Link', type: 'url' },
-      { key: 'deadline', label: 'Apply by', type: 'date' },
-      { key: 'appliedOn', label: 'Applied on', type: 'date' },
+      { key: 'sector', label: 'Sector', placeholder: 'Advertising, broadcast, streaming…' },
+      { key: 'priority', label: 'Priority', type: 'stars', default: 0 },
+      { key: 'status', label: 'Status', type: 'select', options: JOB_STATUS, default: 'New' },
+      { key: 'sourceUrl', label: 'Source URL', type: 'url' },
+      { key: 'dateAdded', label: 'Date added', type: 'date', default: () => todayISO() },
       { key: 'notes', label: 'Notes', type: 'textarea' },
     ],
-    columns: ['title', 'company', 'type', 'status', 'location', 'deadline'],
+    columns: ['company', 'role', 'location', 'sector', 'priority', 'status', 'sourceUrl', 'dateAdded'],
   },
   bookings: {
     label: 'Bookings',
@@ -266,6 +290,16 @@ const SECTIONS = {
 }
 
 const KEYS = Object.keys(SECTIONS)
+const openJobs = (data, type) => (data.jobs || []).filter((j) => j.type === type && !j.outcome).length
+const NAV = [
+  { tab: 'pipeline', label: 'Pipeline', icon: '◎', count: (d) => (d.pipeline || []).filter((r) => r.stage !== 'Archived').length },
+  { tab: 'agencies', label: 'Agencies & Studios', icon: '▣', count: (d) => (d.agencies || []).length },
+  { tab: 'brands', label: 'Brands', icon: '◆', count: (d) => (d.brands || []).length },
+  { tab: 'crew', label: 'Rolodex', icon: '☺', count: (d) => (d.crew || []).length },
+  { tab: 'jobs-freelance', label: 'Freelance Jobs', icon: '✦', count: (d) => openJobs(d, 'Freelance') },
+  { tab: 'jobs-contract', label: 'Contract Jobs', icon: '✧', count: (d) => openJobs(d, 'Contract') },
+  { tab: 'bookings', label: 'Bookings', icon: '▦', count: (d) => (d.bookings || []).length },
+]
 const LOCAL_CACHE = 'zwartboek-cache-v1'
 
 /* ------------------------------------------------------------------ */
@@ -412,6 +446,9 @@ export default function App() {
         saved = { ...record, id: record.id || uid(), createdAt: now, updatedAt: now }
         next = { ...prev, [section]: [...list, saved] }
       }
+      if (section === 'jobs' && (!before || before.status !== saved.status || !saved.statusChangedAt)) {
+        saved.statusChangedAt = now
+      }
       return applySyncRules(next, section, saved, before, now)
     })
   }
@@ -423,7 +460,7 @@ export default function App() {
   function openNew(section, preset = {}) {
     const def = SECTIONS[section]
     const blank = {}
-    for (const f of def.fields) blank[f.key] = f.default ?? ''
+    for (const f of def.fields) blank[f.key] = typeof f.default === 'function' ? f.default() : f.default ?? ''
     setEditing({ section, record: { ...blank, ...preset } })
   }
 
@@ -439,14 +476,14 @@ export default function App() {
         </div>
         <nav>
           <NavItem active={tab === 'overview'} onClick={() => setTab('overview')} icon="⌂" label="Overview" />
-          {KEYS.map((k) => (
+          {NAV.map((n) => (
             <NavItem
-              key={k}
-              active={tab === k}
-              onClick={() => setTab(k)}
-              icon={SECTIONS[k].icon}
-              label={SECTIONS[k].label}
-              count={data[k]?.length}
+              key={n.tab}
+              active={tab === n.tab}
+              onClick={() => setTab(n.tab)}
+              icon={n.icon}
+              label={n.label}
+              count={n.count(data)}
             />
           ))}
         </nav>
@@ -472,6 +509,18 @@ export default function App() {
             onPatch={(record) => upsert('pipeline', record)}
             onDelete={(r) => {
               if (confirm(`Delete ${r.name || 'this contact'}? This can't be undone.`)) remove('pipeline', r.id)
+            }}
+          />
+        ) : tab === 'jobs-freelance' || tab === 'jobs-contract' ? (
+          <JobsView
+            key={tab}
+            kind={tab === 'jobs-freelance' ? 'Freelance' : 'Contract'}
+            records={data.jobs || []}
+            onNew={(preset) => openNew('jobs', preset)}
+            onOpen={(record) => setEditing({ section: 'jobs', record })}
+            onPatch={(record) => upsert('jobs', record)}
+            onDelete={(r) => {
+              if (confirm(`Delete ${r.role || 'this job'}${r.company ? ' at ' + r.company : ''}?`)) remove('jobs', r.id)
             }}
           />
         ) : tab === 'crew' ? (
@@ -567,7 +616,7 @@ function SyncBadge({ state, error }) {
 /*  Overview                                                           */
 /* ------------------------------------------------------------------ */
 
-const ACTIVE_JOB_STATUSES = ['Applied', 'Interview', 'Offer']
+const ACTIVE_JOB_STATUSES = ['Applied', 'No Response', 'Conversation', 'Offer']
 const addDays = (iso, n) => {
   const d = new Date(iso + 'T00:00:00')
   d.setDate(d.getDate() + n)
@@ -583,8 +632,9 @@ function lastSweepJobs(jobs, lastSweep) {
     const ids = new Set(lastSweep.jobIds)
     return { day: dayOf(lastSweep.at), jobs: jobs.filter((j) => ids.has(j.id)) }
   }
-  const day = lastSweep?.at ? dayOf(lastSweep.at) : jobs.map((j) => dayOf(j.createdAt)).sort().pop() || ''
-  return { day, jobs: day ? jobs.filter((j) => dayOf(j.createdAt) === day) : [] }
+  const added = (j) => j.dateAdded || dayOf(j.createdAt)
+  const day = lastSweep?.at ? dayOf(lastSweep.at) : jobs.map(added).sort().pop() || ''
+  return { day, jobs: day ? jobs.filter((j) => added(j) === day) : [] }
 }
 
 function availability(bookings, today) {
@@ -628,7 +678,11 @@ function Overview({ data, meta, goTo, onOpen, onNew }) {
 
   const avail = availability(bookings, today)
   const sweep = lastSweepJobs(jobs, meta?.lastSweep)
-  const appliedJobs = jobs.filter((j) => ACTIVE_JOB_STATUSES.includes(j.status))
+  const appliedJobs = jobs.filter((j) => !j.outcome && ACTIVE_JOB_STATUSES.includes(j.status))
+  const awaitingReply = jobs
+    .filter((j) => !j.outcome && (j.status === 'Applied' || j.status === 'No Response'))
+    .map((j) => ({ ...j, waited: j.statusChangedAt ? daysBetween(dayOf(j.statusChangedAt), today) : 0 }))
+    .sort((a, b) => b.waited - a.waited)
 
   // Agencies with a known contact but nothing active for them in the pipeline
   const activePipeline = pipeline.filter((r) => r.stage !== 'Archived')
@@ -673,11 +727,11 @@ function Overview({ data, meta, goTo, onOpen, onNew }) {
         <Stat label="Pipeline contacts" value={pipeline.length} onClick={() => goTo('pipeline')} />
         <Stat label="Agencies & studios" value={agencies.length} onClick={() => goTo('agencies')} />
         <Stat label="Brands" value={(data.brands || []).length} onClick={() => goTo('brands')} />
-        <Stat label="Applied jobs" value={appliedJobs.length} onClick={() => goTo('jobs')} />
+        <Stat label="Applied jobs" value={appliedJobs.length} onClick={() => goTo('jobs-freelance')} />
         <Stat
           label={sweep.day ? `New jobs · last sweep ${fmtDate(sweep.day)}` : 'New jobs · no sweep yet'}
           value={sweep.jobs.length}
-          onClick={() => goTo('jobs')}
+          onClick={() => goTo('jobs-freelance')}
         />
       </div>
 
@@ -712,12 +766,29 @@ function Overview({ data, meta, goTo, onOpen, onNew }) {
           {agenciesToReach.length > 8 && <div className="muted small pad">+ {agenciesToReach.length - 8} more</div>}
         </Panel>
 
-        <Panel title="New from last sweep" action={() => goTo('jobs')}>
+        <Panel title={`Awaiting reply (${awaitingReply.length})`} action={() => goTo('jobs-freelance')}>
+          {awaitingReply.length === 0 && <div className="muted small">No applications waiting on a reply.</div>}
+          {awaitingReply.slice(0, 8).map((j) => (
+            <Row key={j.id} onClick={() => onOpen('jobs', j)}
+              title={j.role || j.title}
+              sub={[j.company, j.type, j.waited ? `${j.status} ${j.waited} day${j.waited === 1 ? '' : 's'} ago` : `${j.status} today`].filter(Boolean).join(' · ')}
+              right={
+                j.status === 'Applied' && j.waited >= NO_REPLY_DAYS ? (
+                  <span className="badge-noreply">{NO_REPLY_DAYS} days no reply</span>
+                ) : (
+                  <span className={stageClass(j.status)}>{j.status}</span>
+                )
+              }
+            />
+          ))}
+        </Panel>
+
+        <Panel title="New from last sweep" action={() => goTo('jobs-freelance')}>
           {sweep.jobs.length === 0 && <div className="muted small">No jobs added yet.</div>}
           {sweep.jobs.slice(0, 8).map((j) => (
             <Row key={j.id} onClick={() => onOpen('jobs', j)}
-              title={j.title}
-              sub={[j.company, j.location].filter(Boolean).join(' · ')}
+              title={j.role || j.title}
+              sub={[j.company, j.type, j.location].filter(Boolean).join(' · ')}
               right={<span className={stageClass(j.status)}>{j.status}</span>}
             />
           ))}
@@ -1773,6 +1844,204 @@ function RolodexRow({ r, onOpen, onPatch, onDelete }) {
           <button className="mini" disabled title="Add an email address first">✉ Gmail</button>
         )}
         <button className="mini danger" onClick={() => onDelete(r)}>Delete</button>
+      </td>
+    </tr>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  Jobs (Freelance / Contract tabs)                                   */
+/* ------------------------------------------------------------------ */
+
+const JOB_COLUMNS = [
+  { key: 'priority', label: 'Priority', sortable: true },
+  { key: 'company', label: 'Company', sortable: true },
+  { key: 'role', label: 'Role', sortable: true },
+  { key: 'location', label: 'Location', sortable: true },
+  { key: 'sector', label: 'Sector', sortable: true },
+  { key: 'status', label: 'Status', sortable: true },
+  { key: 'sourceUrl', label: 'Source' },
+  { key: 'notes', label: 'Notes' },
+  { key: 'dateAdded', label: 'Added', sortable: true },
+  { key: 'actions', label: '' },
+]
+
+function JobsView({ kind, records, onNew, onOpen, onPatch, onDelete }) {
+  const today = todayISO()
+  const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [open, setOpen] = useState({ passed: false, closed: false })
+  const [sort, setSort] = useState(null) // null = priority, then newest
+
+  const q = query.trim().toLowerCase()
+  const mine = records.filter((j) => j.type === kind)
+  const matches = (j) =>
+    !q || [j.company, j.role, j.location, j.sector, j.notes, j.status, j.sourceUrl].some((v) => String(v || '').toLowerCase().includes(q))
+
+  const sorter = (a, b) => {
+    if (!sort) {
+      const p = (Number(b.priority) || 0) - (Number(a.priority) || 0)
+      if (p) return p
+      return String(b.dateAdded || '').localeCompare(String(a.dateAdded || ''))
+    }
+    const { key, dir } = sort
+    if (key === 'priority') return ((Number(a.priority) || 0) - (Number(b.priority) || 0)) * dir
+    if (key === 'status') return (JOB_STATUS.indexOf(a.status) - JOB_STATUS.indexOf(b.status)) * dir
+    const av = String(a[key] || '')
+    const bv = String(b[key] || '')
+    if (!av && bv) return 1
+    if (av && !bv) return -1
+    return av.localeCompare(bv, undefined, { sensitivity: 'base' }) * dir
+  }
+
+  const visible = mine.filter(matches)
+  const active = visible.filter((j) => !j.outcome && (!statusFilter || j.status === statusFilter)).sort(sorter)
+  const passed = visible.filter((j) => j.outcome === 'passed').sort(sorter)
+  const closed = visible.filter((j) => j.outcome === 'closed').sort(sorter)
+  const stale = active.filter((j) => isNoReply(j, today)).length
+
+  function clickHeader(col) {
+    if (!col.sortable) return
+    setSort((s) => {
+      const first = col.key === 'priority' || col.key === 'dateAdded' ? -1 : 1
+      if (!s || s.key !== col.key) return { key: col.key, dir: first }
+      if (s.dir === first) return { key: col.key, dir: -first }
+      return null
+    })
+  }
+
+  const rowProps = { today, onOpen, onPatch, onDelete }
+  const collapsible = (id, label, list, note) => (
+    <>
+      <tr className="section-row clickable" onClick={() => setOpen((o) => ({ ...o, [id]: !o[id] }))}>
+        <td colSpan={JOB_COLUMNS.length}>
+          <span className="caret">{open[id] ? '▾' : '▸'}</span> {label} <span className="muted">· {list.length}</span>
+          <span className="muted section-note"> {note}</span>
+        </td>
+      </tr>
+      {open[id] && list.map((j) => <JobRow key={j.id} j={j} {...rowProps} />)}
+    </>
+  )
+
+  return (
+    <div className="page page-wide">
+      <header className="page-head">
+        <div>
+          <h1>{kind} Jobs</h1>
+          <p className="muted">
+            {mine.filter((j) => !j.outcome).length} open
+            {stale > 0 && <span className="overdue"> · {stale} with no reply in {NO_REPLY_DAYS}+ days</span>}
+            {sort && (
+              <>
+                {' · '}
+                <button className="link inline" onClick={() => setSort(null)}>reset sort</button>
+              </>
+            )}
+          </p>
+        </div>
+        <div className="toolbar">
+          <input className="search" placeholder="Search…" value={query} onChange={(e) => setQuery(e.target.value)} />
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="">Any status</option>
+            {JOB_STATUS.map((s) => <option key={s}>{s}</option>)}
+          </select>
+          <button className="btn primary" onClick={() => onNew({ type: kind })}>+ New {kind.toLowerCase()} job</button>
+        </div>
+      </header>
+
+      {mine.length === 0 ? (
+        <div className="empty">
+          <p>No {kind.toLowerCase()} jobs yet.</p>
+          <button className="btn primary" onClick={() => onNew({ type: kind })}>Add the first one</button>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table className="pipe-table org-table jobs-table">
+            <thead>
+              <tr>
+                {JOB_COLUMNS.map((c) => (
+                  <th key={c.key} className={'col-' + c.key + (c.sortable ? '' : ' nosort')} onClick={() => clickHeader(c)}>
+                    {c.label}
+                    {sort?.key === c.key && <span className="sort">{sort.dir === 1 ? ' ↑' : ' ↓'}</span>}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {active.map((j) => <JobRow key={j.id} j={j} {...rowProps} />)}
+              {active.length === 0 && (
+                <tr><td colSpan={JOB_COLUMNS.length} className="muted small">{q || statusFilter ? 'No matches.' : 'No open jobs.'}</td></tr>
+              )}
+              {passed.length > 0 && collapsible('passed', 'Passed', passed, '— chose not to apply')}
+              {closed.length > 0 && collapsible('closed', 'Closed', closed, '— heard back / rejected')}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function isNoReply(j, today) {
+  return !j.outcome && j.status === 'Applied' && j.statusChangedAt && daysBetween(dayOf(j.statusChangedAt), today) >= NO_REPLY_DAYS
+}
+
+function JobRow({ j, today, onOpen, onPatch, onDelete }) {
+  const patch = (changes) => onPatch({ ...j, ...changes })
+  const done = !!j.outcome
+  const noReply = isNoReply(j, today)
+
+  return (
+    <tr className={'pipe-row' + (done ? ' archived' : '') + (Number(j.priority) >= 4 && !done ? ' starred' : '')}>
+      <td className="col-priority"><StarRating size="sm" value={j.priority} onChange={(v) => patch({ priority: v })} /></td>
+      <td className="col-company">
+        <DraftField value={j.company} placeholder="Company…" onCommit={(v) => patch({ company: v })} />
+      </td>
+      <td className="col-role">
+        <button className="name-btn" onClick={() => onOpen(j)} title="Open full details">{j.role || 'Untitled role'}</button>
+      </td>
+      <td className="col-location">
+        <DraftField value={j.location} placeholder="Location…" onCommit={(v) => patch({ location: v })} />
+      </td>
+      <td className="col-sector">
+        <DraftField value={j.sector} placeholder="Sector…" onCommit={(v) => patch({ sector: v })} />
+      </td>
+      <td className="col-status">
+        <select className={'stage-select ' + stageClass(j.status)} value={j.status || ''} onChange={(e) => patch({ status: e.target.value })}>
+          {!JOB_STATUS.includes(j.status) && <option value={j.status || ''}>{j.status || '—'}</option>}
+          {JOB_STATUS.map((s) => <option key={s}>{s}</option>)}
+        </select>
+        {noReply && <div className="badge-noreply small-badge">{NO_REPLY_DAYS} days no reply</div>}
+      </td>
+      <td className="col-sourceUrl">
+        {j.sourceUrl ? (
+          <a href={siteHref(j.sourceUrl)} target="_blank" rel="noreferrer" title={j.sourceUrl}>
+            {siteLabel(j.sourceUrl).split('/')[0]} ↗
+          </a>
+        ) : (
+          <span className="muted">—</span>
+        )}
+      </td>
+      <td className="col-notes">
+        <DraftField multiline value={j.notes} placeholder="Notes…" onCommit={(v) => patch({ notes: v })} />
+      </td>
+      <td className="col-dateAdded">
+        <span className="muted small">{fmtDate(j.dateAdded)}</span>
+      </td>
+      <td className="col-actions">
+        {done ? (
+          <button className="mini" onClick={() => patch({ outcome: '', outcomeAt: '' })}>Reopen</button>
+        ) : (
+          <>
+            <button className="mini btn-pass" title="Chose not to apply" onClick={() => patch({ outcome: 'passed', outcomeAt: new Date().toISOString() })}>
+              Pass
+            </button>
+            <button className="mini btn-close" title="Heard back / rejected" onClick={() => patch({ outcome: 'closed', outcomeAt: new Date().toISOString() })}>
+              Close
+            </button>
+          </>
+        )}
+        <button className="mini danger" onClick={() => onDelete(j)}>Delete</button>
       </td>
     </tr>
   )
