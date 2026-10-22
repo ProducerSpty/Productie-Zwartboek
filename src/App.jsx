@@ -200,7 +200,8 @@ export default function App() {
   const [loaded, setLoaded] = useState(false)
   const [sync, setSync] = useState('loading') // loading | saved | saving | offline | error
   const [errorMsg, setErrorMsg] = useState('')
-  const [tab, setTab] = useState('dashboard')
+  const [tab, setTab] = useState('overview')
+  const [meta, setMeta] = useState({ lastSweep: null }) // non-section keys, e.g. lastSweep
   const [editing, setEditing] = useState(null) // { section, record }
   const dirty = useRef(new Set())
   const timer = useRef(null)
@@ -217,6 +218,7 @@ export default function App() {
           for (const k of KEYS) if (Array.isArray(remote[k])) next[k] = remote[k]
           return next
         })
+        setMeta({ lastSweep: remote.lastSweep || null })
         setSync('saved')
       } catch (e) {
         console.error(e)
@@ -299,7 +301,7 @@ export default function App() {
           </div>
         </div>
         <nav>
-          <NavItem active={tab === 'dashboard'} onClick={() => setTab('dashboard')} icon="⌂" label="Dashboard" />
+          <NavItem active={tab === 'overview'} onClick={() => setTab('overview')} icon="⌂" label="Overview" />
           {KEYS.map((k) => (
             <NavItem
               key={k}
@@ -317,8 +319,14 @@ export default function App() {
       <main className="main">
         {!loaded ? (
           <div className="empty">Loading…</div>
-        ) : tab === 'dashboard' ? (
-          <Dashboard data={data} goTo={setTab} onOpen={(section, record) => setEditing({ section, record })} />
+        ) : tab === 'overview' ? (
+          <Overview
+            data={data}
+            meta={meta}
+            goTo={setTab}
+            onOpen={(section, record) => setEditing({ section, record })}
+            onNew={openNew}
+          />
         ) : (
           <SectionView
             key={tab}
@@ -383,51 +391,166 @@ function SyncBadge({ state, error }) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Dashboard                                                          */
+/*  Overview                                                           */
 /* ------------------------------------------------------------------ */
 
-function Dashboard({ data, goTo, onOpen }) {
-  const today = todayISO()
-  const in30 = localISO(new Date(Date.now() + 30 * 86400000))
+const ACTIVE_JOB_STATUSES = ['Applied', 'Interview', 'Offer']
+const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+const addDays = (iso, n) => {
+  const d = new Date(iso + 'T00:00:00')
+  d.setDate(d.getDate() + n)
+  return localISO(d)
+}
+const dayOf = (ts) => (ts ? localISO(new Date(ts)) : '')
 
-  const followUps = (data.pipeline || [])
-    .filter((r) => r.nextDate && !['Won', 'Lost'].includes(r.stage) && r.nextDate <= in30)
+// "Last sweep" = the newest batch of jobs.
+// If a `lastSweep` record exists in crm_data ({ at: ISO timestamp, jobIds?: [...] }) it wins;
+// otherwise we use the most recent day on which any job was added.
+function lastSweepJobs(jobs, lastSweep) {
+  if (lastSweep?.jobIds?.length) {
+    const ids = new Set(lastSweep.jobIds)
+    return { day: dayOf(lastSweep.at), jobs: jobs.filter((j) => ids.has(j.id)) }
+  }
+  const day = lastSweep?.at ? dayOf(lastSweep.at) : jobs.map((j) => dayOf(j.createdAt)).sort().pop() || ''
+  return { day, jobs: day ? jobs.filter((j) => dayOf(j.createdAt) === day) : [] }
+}
+
+function availability(bookings, today) {
+  const live = bookings.filter((b) => b.start && b.status !== 'Released')
+  const endOf = (b) => b.end || b.start
+  const latest = [...live].sort((a, b) => endOf(a).localeCompare(endOf(b))).pop()
+  if (!latest || endOf(latest) < today) {
+    return {
+      free: true,
+      headline: 'Available now',
+      detail: latest ? `Last booking (${latest.project}) ended ${fmtDate(endOf(latest))}.` : 'No bookings in the calendar.',
+    }
+  }
+  const latestConfirmed = live
+    .filter((b) => b.status === 'Confirmed')
+    .sort((a, b) => endOf(a).localeCompare(endOf(b)))
+    .pop()
+  const current = live.find((b) => b.start <= today && endOf(b) >= today)
+  const freeFrom = addDays(endOf(latest), 1)
+  let detail = `Latest booking: ${latest.project}${latest.client ? ` (${latest.client})` : ''}, ends ${fmtDate(endOf(latest))}`
+  if (latest.status !== 'Confirmed') {
+    detail += ` — ${latest.status}`
+    if (latestConfirmed && endOf(latestConfirmed) >= today) detail += `. Confirmed work runs until ${fmtDate(endOf(latestConfirmed))}`
+    else detail += '. No confirmed work ahead'
+  }
+  return {
+    free: false,
+    tentative: latest.status !== 'Confirmed',
+    headline: current ? `Booked — available from ${fmtDate(freeFrom)}` : `Available from ${fmtDate(freeFrom)}`,
+    detail: detail + '.',
+  }
+}
+
+function Overview({ data, meta, goTo, onOpen, onNew }) {
+  const today = todayISO()
+  const in30 = addDays(today, 30)
+  const pipeline = data.pipeline || []
+  const agencies = data.agencies || []
+  const jobs = data.jobs || []
+  const bookings = data.bookings || []
+
+  const avail = availability(bookings, today)
+  const sweep = lastSweepJobs(jobs, meta?.lastSweep)
+  const appliedJobs = jobs.filter((j) => ACTIVE_JOB_STATUSES.includes(j.status))
+
+  // Agencies with a known contact but nothing active for them in the pipeline
+  const activePipeline = pipeline.filter((r) => !['Won', 'Lost'].includes(r.stage))
+  const activeCompanies = new Set(activePipeline.map((r) => normName(r.company)).filter(Boolean))
+  const activeEmails = new Set(activePipeline.map((r) => String(r.email || '').toLowerCase()).filter(Boolean))
+  const agenciesToReach = agencies
+    .filter((a) => (a.contactName || a.email) && a.status !== 'Not a fit')
+    .filter((a) => !activeCompanies.has(normName(a.name)))
+    .filter((a) => !(a.email && activeEmails.has(a.email.toLowerCase())))
+    .sort((a, b) => PRIORITY.indexOf(a.priority || 'Low') - PRIORITY.indexOf(b.priority || 'Low'))
+
+  const followUps = activePipeline
+    .filter((r) => r.nextDate && r.nextDate <= in30)
     .sort((a, b) => a.nextDate.localeCompare(b.nextDate))
 
-  const upcoming = (data.bookings || [])
-    .filter((b) => b.status !== 'Released' && (b.end || b.start) >= today)
+  const upcoming = bookings
+    .filter((b) => b.start && b.status !== 'Released' && (b.end || b.start) >= today)
     .sort((a, b) => a.start.localeCompare(b.start))
     .slice(0, 6)
-
-  const jobDeadlines = (data.jobs || [])
-    .filter((j) => j.deadline && j.deadline >= today && ['Found', 'Applied', 'Interview'].includes(j.status))
-    .sort((a, b) => a.deadline.localeCompare(b.deadline))
-    .slice(0, 6)
-
-  const openPipeline = (data.pipeline || []).filter((r) => !['Won', 'Lost'].includes(r.stage))
-  const pipelineValue = openPipeline.reduce((s, r) => s + (Number(r.value) || 0), 0)
-
-  const bookedDays = (data.bookings || [])
-    .filter((b) => b.status === 'Confirmed' && b.start?.slice(0, 7) === today.slice(0, 7))
-    .reduce((s, b) => s + (b.end ? daysBetween(b.start, b.end) + 1 : 1), 0)
 
   return (
     <div className="page">
       <header className="page-head">
         <div>
-          <h1>Dashboard</h1>
+          <h1>Overview</h1>
           <p className="muted">{new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
         </div>
       </header>
 
+      <button
+        className={'avail ' + (avail.free ? 'avail-free' : avail.tentative ? 'avail-tentative' : 'avail-booked')}
+        onClick={() => goTo('bookings')}
+      >
+        <span className="avail-dot" />
+        <span>
+          <span className="avail-head">{avail.headline}</span>
+          <span className="avail-detail">{avail.detail}</span>
+        </span>
+      </button>
+
       <div className="stats">
-        <Stat label="Open leads" value={openPipeline.length} onClick={() => goTo('pipeline')} />
-        <Stat label="Pipeline value" value={fmtMoney(pipelineValue) || '€0'} onClick={() => goTo('pipeline')} />
-        <Stat label="Confirmed days this month" value={bookedDays} onClick={() => goTo('bookings')} />
-        <Stat label="Active applications" value={(data.jobs || []).filter((j) => ['Applied', 'Interview', 'Offer'].includes(j.status)).length} onClick={() => goTo('jobs')} />
+        <Stat label="Pipeline contacts" value={pipeline.length} onClick={() => goTo('pipeline')} />
+        <Stat label="Agencies & studios" value={agencies.length} onClick={() => goTo('agencies')} />
+        <Stat label="Brands" value={(data.brands || []).length} onClick={() => goTo('brands')} />
+        <Stat label="Applied jobs" value={appliedJobs.length} onClick={() => goTo('jobs')} />
+        <Stat
+          label={sweep.day ? `New jobs · last sweep ${fmtDate(sweep.day)}` : 'New jobs · no sweep yet'}
+          value={sweep.jobs.length}
+          onClick={() => goTo('jobs')}
+        />
       </div>
 
       <div className="dash-grid">
+        <Panel title={`Agencies not in your pipeline (${agenciesToReach.length})`} action={() => goTo('agencies')}>
+          {agenciesToReach.length === 0 && (
+            <div className="muted small">Every agency with a known contact already has an active pipeline entry.</div>
+          )}
+          {agenciesToReach.slice(0, 8).map((a) => (
+            <div className="row row-split" key={a.id}>
+              <button className="row-main row-btn" onClick={() => onOpen('agencies', a)}>
+                <div className="row-title">{a.name}</div>
+                <div className="row-sub">{[a.contactName, a.email].filter(Boolean).join(' · ')}</div>
+              </button>
+              {a.priority && <span className={'pri pri-' + a.priority.toLowerCase()}>{a.priority}</span>}
+              <button
+                className="btn btn-sm"
+                onClick={() =>
+                  onNew('pipeline', {
+                    name: a.contactName || '',
+                    company: a.name,
+                    email: a.email || '',
+                    source: 'Agencies list',
+                    stage: 'Lead',
+                  })
+                }
+              >
+                + Pipeline
+              </button>
+            </div>
+          ))}
+          {agenciesToReach.length > 8 && <div className="muted small pad">+ {agenciesToReach.length - 8} more</div>}
+        </Panel>
+
+        <Panel title="New from last sweep" action={() => goTo('jobs')}>
+          {sweep.jobs.length === 0 && <div className="muted small">No jobs added yet.</div>}
+          {sweep.jobs.slice(0, 8).map((j) => (
+            <Row key={j.id} onClick={() => onOpen('jobs', j)}
+              title={j.title}
+              sub={[j.company, j.location].filter(Boolean).join(' · ')}
+              right={<span className={stageClass(j.status)}>{j.status}</span>}
+            />
+          ))}
+        </Panel>
+
         <Panel title="Follow-ups" action={() => goTo('pipeline')}>
           {followUps.length === 0 && <div className="muted small">Nothing scheduled. Add a “Follow up on” date to a contact.</div>}
           {followUps.map((r) => (
@@ -448,31 +571,6 @@ function Dashboard({ data, goTo, onOpen }) {
               right={<span className={stageClass(b.status)}>{b.status}</span>}
             />
           ))}
-        </Panel>
-
-        <Panel title="Job deadlines" action={() => goTo('jobs')}>
-          {jobDeadlines.length === 0 && <div className="muted small">No open deadlines.</div>}
-          {jobDeadlines.map((j) => (
-            <Row key={j.id} onClick={() => onOpen('jobs', j)}
-              title={j.title}
-              sub={j.company}
-              right={<span className="muted">{fmtDate(j.deadline)}</span>}
-            />
-          ))}
-        </Panel>
-
-        <Panel title="Pipeline by stage" action={() => goTo('pipeline')}>
-          {PIPELINE_STAGES.map((s) => {
-            const n = (data.pipeline || []).filter((r) => r.stage === s).length
-            const max = Math.max(1, ...PIPELINE_STAGES.map((x) => (data.pipeline || []).filter((r) => r.stage === x).length))
-            return (
-              <div className="bar-row" key={s}>
-                <span className="bar-label">{s}</span>
-                <span className="bar-track"><span className="bar-fill" style={{ width: (n / max) * 100 + '%' }} /></span>
-                <span className="bar-n">{n}</span>
-              </div>
-            )
-          })}
         </Panel>
       </div>
     </div>

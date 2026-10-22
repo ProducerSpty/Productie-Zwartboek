@@ -184,3 +184,19 @@ textarea { resize: vertical; }
   .form-grid { grid-template-columns: 1fr; }
   .cal-cell { min-height: 70px; }
 }
+
+/* Overview: availability banner + agency rows */
+.avail { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; border-radius: var(--radius); padding: 14px 18px; margin-bottom: 14px; border: 1px solid; }
+.avail > span:last-child { display: flex; flex-direction: column; gap: 2px; }
+.avail-head { font-size: 16px; font-weight: 700; }
+.avail-detail { font-size: 12px; opacity: .85; }
+.avail-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: currentColor; }
+.avail-free { background: #dff1e6; border-color: #bfe2cc; color: #1d6a42; }
+.avail-booked { background: #f3e1de; border-color: #e8c7c1; color: #8c3324; }
+.avail-tentative { background: #fbf0d9; border-color: #efdcae; color: #7a540e; }
+.row-split { cursor: default; }
+.row-split:hover { background: none; }
+.row-btn { background: none; border: 0; padding: 0; text-align: left; cursor: pointer; }
+.row-btn:hover .row-title { text-decoration: underline; }
+.btn-sm { padding: 4px 10px; font-size: 12px; flex-shrink: 0; }
+.pad { padding: 4px 8px; }
