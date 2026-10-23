@@ -8,36 +8,54 @@
  *  The same instructions live in CLAUDE.md and in the claude.ai Project
  *  "CRM TEST" (doc: claude/sweep-ams.md) — keep all three in sync.
  *
- *  Profile: Post Production Producer, based around Amsterdam, freelance (ZZP).
+ *  Profile: (Executive) Post Production Producer, freelance (ZZP), works
+ *  internationally — Netherlands, Germany, Poland (+ remote UK).
  *
- *  KEYWORDS: SWEEP_AMS.keywords lists every title (English + Dutch).
- *     To keep LinkedIn activity low, search them as the combined OR queries
- *     in SWEEP_AMS.keywordGroups (one search per group) — not one per keyword.
+ *  THE SEARCH LIST IS GENERATED: call sweepSearches() below (or rebuild it the
+ *  same way) to get every LinkedIn URL with its label. Don't hand-type URLs.
+ *  Updated 23 Oct 2026: Germany + Poland added with localised titles, city
+ *  searches, full-time/on-site roles, and country-wide contract searches.
  *
- *  1. LINKEDIN JOBS — AMSTERDAM
- *     One search per keyword group, location Amsterdam, posted in the past
- *     week, experience level Associate and above (SWEEP_AMS.amsterdamSearch).
+ *  1. CITY SEARCHES — ALL JOB TYPES (full-time, contract, on-site, hybrid, remote)
+ *     For every city in SWEEP_AMS.countries[*].cities: one search per query
+ *     in that country's `queries` (English + local language), past week.
+ *       Netherlands: Amsterdam (4 queries: 3 English groups + Dutch)
+ *       Germany:     Berlin, Hamburg, Munich, Frankfurt, Cologne (English + German)
+ *       Poland:      Warsaw, Kraków, Wrocław (English + Polish)
+ *     Do NOT add the experience-level filter (f_E): LinkedIn then hides every
+ *     listing without a stated level (it hid Platige Image's producer role).
+ *     Junior roles are filtered by the skip list instead.
  *
- *  2. LINKEDIN JOBS — REMOTE, CONTRACT/FREELANCE ONLY
- *     Remote roles in each of SWEEP_AMS.remoteCountries (Netherlands, UK,
- *     Germany, Poland), job type Contract / Temporary / Other only (LinkedIn
- *     has no "Freelance" type; freelance roles sit there). English groups for
- *     every country; the Dutch group only for the Netherlands.
- *     Use the country's geoId in the URL — LinkedIn ignores location=<name>
- *     here and silently falls back to the Netherlands.
+ *  2. COUNTRY-WIDE CONTRACT SEARCHES
+ *     Netherlands, Germany, Poland: same queries, whole country, job types
+ *     Contract / Temporary / Other (f_JT=C,T,O), any workplace type.
+ *     United Kingdom: remote only (f_WT=2) + contract types, English queries.
+ *     LinkedIn has no "Freelance" type; freelance roles sit under these.
  *
- *  READING RESULTS: only cards above "Expand your search" are real matches.
- *     A page headed "Jobs you may be interested in" (no result count) means
- *     ZERO matches — those cards are recommendations; don't save them.
- *     Open a shortlisted job before saving to check employment type/seniority.
+ *  LOCATIONS: always use geoId (SWEEP_AMS geoIds). location=<name> is ignored
+ *     for country searches and snaps cities to districts (Berlin → Köpenick).
+ *
+ *  READING RESULTS:
+ *     - Read the "N results" count and only take the first N cards — LinkedIn
+ *       appends recommendations after the real matches, sometimes without an
+ *       "Expand your search" divider.
+ *     - A page headed "Jobs you may be interested in" means ZERO matches.
+ *     - Scroll the results list before reading: cards past ~7 render empty
+ *       until scrolled into view.
+ *     - Give each page ~3.5 s after navigating.
+ *     - Open each shortlisted job before saving to check employment type,
+ *       hours, language and seniority.
  *
  *  3. LINKEDIN POST SEARCHES — PEOPLE LOOKING TO HIRE
- *     Run every phrase in SWEEP_AMS.postSearches as a LinkedIn *posts* search
- *     (not jobs), unquoted, sorted by latest. Dutch phrases work far better
- *     than English ones. Look for people publicly looking to hire a producer.
+ *     Every phrase in each country's `postSearches`, as a LinkedIn *posts*
+ *     search (not jobs), unquoted, sorted by latest.
+ *     - Dutch posts work well; German posts are useful (feature films posting
+ *       for a Herstellungsleitung); Polish posts are mostly noise because
+ *       "producent" also means manufacturer — keep them film-specific.
  *     - A post that describes a concrete role → save it as a job (type
- *       Freelance unless the post says contract), sourceUrl = the post URL,
- *       notes = who posted + a one-line summary.
+ *       Freelance unless the post says contract), sourceUrl = the post URL or
+ *       the poster's profile if the post URL isn't exposed, notes = who
+ *       posted + a one-line summary. Ignore posts older than ~6 weeks.
  *     - Anything vaguer → only mention it in the chat report.
  *
  *  4. WRITE NEW RELEVANT ROLES
@@ -46,8 +64,9 @@
  *       "jc" (contract jobs)  → crm_data key `jobs`, with type: 'Contract'
  *       "jw" (pipeline)       → crm_data key `pipeline`  (READ ONLY in a sweep)
  *     Classification: freelance / ZZP / per-project / day-rate roles → Freelance.
- *     Contract, fixed-term, interim → Contract. Permanent full-time roles from
- *     step 1 → Contract with "Permanent" at the start of notes.
+ *     Contract, fixed-term, interim → Contract. Permanent full-time roles →
+ *     Contract with "Permanent, full-time" at the start of notes; note if the
+ *     role needs German or Polish.
  *     Every new entry gets isNew: true, status 'New', today's dateAdded.
  *     ALWAYS de-duplicate before writing. Don't write to Supabase by hand:
  *     open https://productie-zwartboek.vercel.app in Chrome and call
@@ -62,81 +81,139 @@
  *
  *  6. SKIP
  *     Junior roles, assistants/coordinators, internships, traineeships,
- *     graduate schemes, and anything clearly outside post production /
+ *     working students, graduate schemes, video editors / camera / audio
+ *     engineers (crew, not producer roles), game producers, factory
+ *     "production manager" roles (Produktionsleiter, Kierownik produkcji in
+ *     manufacturing), and anything clearly outside post production /
  *     film & content producing (see SWEEP_AMS.skip).
  *
- *  REPORT FORMAT (chat): jobs added (freelance / contract, with links),
- *  duplicates skipped, hiring posts worth a look, overdue contacts.
- *  Keep LinkedIn activity to these searches — heavy automated browsing can
- *  get an account rate-limited.
+ *  REPORT FORMAT (chat): jobs added grouped by country (freelance / contract,
+ *  with links and star priority), duplicates skipped, what was skipped and why,
+ *  hiring posts worth a look, overdue contacts.
+ *  A full sweep is ~45 LinkedIn page loads. Keep LinkedIn activity to these
+ *  searches — heavy automated browsing can get an account rate-limited.
  * ===========================================================================
  */
+
+// English title groups used for the Netherlands (more granular, original set)
+const EN_GROUPS = {
+  postAndFilm: 'Post Producer OR "post production producer" OR "Film Producer" OR "Shoot Producer" OR "Senior post producer" OR "Senior film producer"',
+  videoAndContent: '"Video Lead" OR "Head of Video" OR "Senior Video Producer" OR "Video producer" OR "Head of Content Production" OR "Content Production Lead"',
+  seniorProduction: '"Executive Producer" OR "Head of Production" OR "Line Producer" OR "Post Production Supervisor" OR "Post Production Manager" OR "Finishing Producer" OR "Delivery Producer"',
+}
+// One combined English query for Germany / Poland / UK (keeps page loads down)
+const EN_CORE =
+  '"Post Producer" OR "Post-Production" OR "Commercial Producer" OR "Executive Producer" OR "Line Producer" OR "Head of Production" OR "Post Production Supervisor" OR "Video Lead" OR "Head of Video" OR "Senior Video Producer" OR "Film Producer" OR "Agency Producer" OR "Integrated Producer"'
+
+// Local-language titles. Avoid bare words that also mean factory work
+// (DE "Produktionsleitung", PL bare "Producent" = manufacturer).
+const LOCAL = {
+  nl: 'Producent OR "Uitvoerend producent" OR "Postproductie producent" OR Productieleider OR "Hoofd productie" OR "Video producer"',
+  de: 'Produzent OR Filmproduzent OR Herstellungsleiter OR Herstellungsleitung OR Postproduktion OR Postproduktionsleiter OR "Producer Postproduktion" OR "Video Producer"',
+  pl: '"Producent wykonawczy" OR "Producent filmowy" OR "Producent reklam" OR "Producent wideo" OR "Producent postprodukcji" OR "Kierownik postprodukcji" OR Postprodukcja OR "Szef produkcji" OR "Kierownik produkcji"',
+}
 
 export const SWEEP_AMS = {
   trigger: 'Run sweep AMS',
   appUrl: 'https://productie-zwartboek.vercel.app',
-  profile: 'Post Production Producer',
-  keywords: [
-    // original set
-    'Post Producer',
-    'Post production producers',
-    'Film Producer',
-    'Shoot Producer',
-    'Senior post producer',
-    'Senior film producer',
-    // video & content leads (added after first sweep, 22 Oct 2026)
-    'Video Lead',
-    'Head of Video',
-    'Senior Video Producer',
-    'Head of Content Production',
-    'Content Production Lead',
-    // senior production roles that include post
-    'Executive Producer',
-    'Head of Production',
-    'Line Producer',
-    'Post Production Supervisor',
-    'Post Production Manager',
-    'Finishing Producer',
-    'Delivery Producer',
-    // Dutch titles
-    'Producent',
-    'Uitvoerend producent',
-    'Postproductie producent',
-    'Productieleider',
-    'Hoofd productie',
-    'Video producer',
+  profile: 'Executive / Post Production Producer',
+  // Every title searched, for reference (the queries below are what's actually sent)
+  keywords: {
+    english: [
+      'Post Producer', 'Post production producer', 'Film Producer', 'Shoot Producer', 'Senior post producer',
+      'Senior film producer', 'Video Lead', 'Head of Video', 'Senior Video Producer', 'Head of Content Production',
+      'Content Production Lead', 'Executive Producer', 'Head of Production', 'Line Producer',
+      'Post Production Supervisor', 'Post Production Manager', 'Finishing Producer', 'Delivery Producer',
+      'Commercial Producer', 'Agency Producer', 'Integrated Producer', 'Post-Production (Lead/Producer)',
+    ],
+    dutch: ['Producent', 'Uitvoerend producent', 'Postproductie producent', 'Productieleider', 'Hoofd productie', 'Video producer'],
+    german: ['Produzent', 'Filmproduzent', 'Herstellungsleiter / Herstellungsleitung', 'Postproduktion', 'Postproduktionsleiter', 'Producer Postproduktion', 'Video Producer'],
+    polish: ['Producent wykonawczy', 'Producent filmowy', 'Producent reklam', 'Producent wideo', 'Producent postprodukcji', 'Kierownik postprodukcji', 'Postprodukcja', 'Szef produkcji', 'Kierownik produkcji'],
+  },
+  countries: {
+    Netherlands: {
+      geoId: '102890719',
+      queries: { ...EN_GROUPS, dutch: LOCAL.nl },
+      // Amsterdam by name works (and its radius covers Hilversum / Utrecht)
+      cities: [{ name: 'Amsterdam', location: 'Amsterdam, North Holland, Netherlands' }],
+      contractSearch: true,
+      postSearches: [
+        'freelance producent gezocht',
+        'producent gezocht',
+        'postproductie producent gezocht',
+        'productieleider gezocht',
+        'freelance producer gezocht',
+        'video producer gezocht',
+      ],
+    },
+    Germany: {
+      geoId: '101282230',
+      queries: { english: EN_CORE, german: LOCAL.de },
+      cities: [
+        { name: 'Berlin', geoId: '106967730' },
+        { name: 'Hamburg', geoId: '106430557' },
+        { name: 'Munich', geoId: '100477049' },
+        { name: 'Frankfurt', geoId: '106772406' },
+        { name: 'Cologne', geoId: '105890944' },
+      ],
+      contractSearch: true,
+      postSearches: ['Postproduktion Producer gesucht', 'Herstellungsleitung gesucht', 'freelance Producer gesucht Film'],
+    },
+    Poland: {
+      geoId: '105072130',
+      queries: { english: EN_CORE, polish: LOCAL.pl },
+      cities: [
+        { name: 'Warsaw', geoId: '105076658' },
+        { name: 'Kraków', geoId: '103263110' },
+        { name: 'Wrocław', geoId: '90009834' }, // Wrocław metropolitan area
+      ],
+      contractSearch: true,
+      // Low yield on LinkedIn — kept film-specific to avoid manufacturing posts
+      postSearches: ['poszukujemy producenta wykonawczego', 'kierownik produkcji filmowej poszukiwany'],
+    },
+    'United Kingdom': {
+      geoId: '101165590',
+      queries: { english: EN_CORE },
+      cities: [],
+      remoteContractOnly: true,
+      postSearches: [],
+    },
+  },
+  // Time windows: past week for regular sweeps; past month for a first pass on a new country/city
+  timeWindow: { regular: 'r604800', firstPass: 'r2592000' },
+  skip: [
+    'junior', 'intern', 'internship', 'stage', 'stagiair', 'trainee', 'graduate', 'werkstudent', 'assistant',
+    'assistent', 'runner', 'praktikant', 'praktikum', 'stażysta', 'staż', 'praktykant', 'asystent',
   ],
-  // Combined LinkedIn queries — one search per group (covers all keywords above)
-  keywordGroups: {
-    postAndFilm: 'Post Producer OR "post production producer" OR "Film Producer" OR "Shoot Producer" OR "Senior post producer" OR "Senior film producer"',
-    videoAndContent: '"Video Lead" OR "Head of Video" OR "Senior Video Producer" OR "Video producer" OR "Head of Content Production" OR "Content Production Lead"',
-    seniorProduction: '"Executive Producer" OR "Head of Production" OR "Line Producer" OR "Post Production Supervisor" OR "Post Production Manager" OR "Finishing Producer" OR "Delivery Producer"',
-    dutch: 'Producent OR "Uitvoerend producent" OR "Postproductie producent" OR Productieleider OR "Hoofd productie" OR "Video producer"',
-  },
-  dutchGroupOnlyIn: ['Netherlands'],
-  amsterdamSearch: {
-    location: 'Amsterdam, North Holland, Netherlands',
-    // LinkedIn URL params: past week, experience Associate/Mid-Senior/Director/Executive
-    params: { f_TPR: 'r604800', f_E: '3,4,5,6' },
-  },
-  remoteCountries: ['Netherlands', 'United Kingdom', 'Germany', 'Poland'],
-  // LinkedIn geoIds — use &geoId=… (location=<name> is ignored for these searches)
-  geoIds: { Netherlands: '102890719', 'United Kingdom': '101165590', Germany: '101282230', Poland: '105072130' },
-  remoteSearch: {
-    // remote only; job types Contract, Temporary, Other; past week
-    params: { f_WT: '2', f_JT: 'C,T,O', f_TPR: 'r604800' },
-  },
-  // Dutch phrases only — English ones returned nothing useful in the first sweep
-  postSearches: [
-    'freelance producent gezocht',
-    'producent gezocht',
-    'postproductie producent gezocht',
-    'productieleider gezocht',
-    'freelance producer gezocht',
-    'video producer gezocht',
-  ],
-  skip: ['junior', 'intern', 'internship', 'stage', 'stagiair', 'trainee', 'graduate', 'werkstudent', 'assistant', 'runner'],
   overdueDays: 14,
+}
+
+// Every LinkedIn search for a sweep, in order: [{ label, url }]
+export function sweepSearches({ firstPass = false } = {}) {
+  const tpr = firstPass ? SWEEP_AMS.timeWindow.firstPass : SWEEP_AMS.timeWindow.regular
+  const J = 'https://www.linkedin.com/jobs/search/?keywords='
+  const P = 'https://www.linkedin.com/search/results/content/?keywords='
+  const enc = encodeURIComponent
+  const out = []
+  for (const [country, c] of Object.entries(SWEEP_AMS.countries)) {
+    for (const city of c.cities) {
+      const where = city.geoId ? `&geoId=${city.geoId}` : `&location=${enc(city.location)}`
+      for (const [qName, q] of Object.entries(c.queries)) {
+        out.push({ label: `${city.name} · ${qName} · all job types`, url: `${J}${enc(q)}${where}&f_TPR=${tpr}` })
+      }
+    }
+    for (const [qName, q] of Object.entries(c.queries)) {
+      if (c.remoteContractOnly) {
+        out.push({ label: `${country} · ${qName} · remote contract`, url: `${J}${enc(q)}&geoId=${c.geoId}&f_WT=2&f_JT=C%2CT%2CO&f_TPR=${tpr}` })
+      } else if (c.contractSearch) {
+        out.push({ label: `${country} · ${qName} · contract (country-wide)`, url: `${J}${enc(q)}&geoId=${c.geoId}&f_JT=C%2CT%2CO&f_TPR=${tpr}` })
+      }
+    }
+    for (const phrase of c.postSearches) {
+      out.push({ label: `${country} · posts · ${phrase}`, url: `${P}${enc(phrase)}&sortBy=%22date_posted%22` })
+    }
+  }
+  return out
 }
 
 /* ---------------- helpers used by window.zwartboek (see App.jsx) ---------------- */

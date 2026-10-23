@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { loadAll, saveKey } from './supabase.js'
 // Sweep instructions ("Run sweep AMS") are documented at the top of sweep.js
-import { prepareSweepJobs, overdueContacts, SWEEP_AMS } from './sweep.js'
+import { prepareSweepJobs, overdueContacts, SWEEP_AMS, sweepSearches } from './sweep.js'
 
 /* ------------------------------------------------------------------ */
 /*  Section definitions — each one is stored as a JSON array under key */
@@ -429,6 +429,8 @@ export default function App() {
     if (!loaded) return
     window.zwartboek = {
       sweep: SWEEP_AMS,
+      // Full list of LinkedIn searches for a sweep: [{ label, url }]
+      searches: (opts) => sweepSearches(opts),
       ready: true,
       async importSweep(rawJobs) {
         const now = new Date().toISOString()
