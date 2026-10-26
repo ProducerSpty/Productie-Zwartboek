@@ -28,6 +28,8 @@ Full instructions are in the comment block at the top of `src/sweep.js` (same te
 5. Report overdue contacts (no contact in 14+ days) in chat via `window.zwartboek.overdueContacts()`. **Never write to the pipeline during a sweep.**
 6. Skip junior roles, internships, crew roles (editors, camera, audio), game producers, factory production-manager roles, and anything outside post production / film producing.
 
+**Triggers:** "Run sweep AMS" = core countries above. "Run sweep EU" = Czechia (Prague), Spain (Madrid, Barcelona), Italy (Milan, Rome), Switzerland (Zurich, Geneva, Lausanne), Belgium (Antwerp, Ghent, Brussels — Flemish focus), prepared 26 Oct 2026 with localised titles but **not yet run**: on its first run, verify the country geoIds, resolve the city geoIds via LinkedIn's location box, use `{ firstPass: true }`, then mark the countries `status: 'active'` (see the checklist in `src/sweep.js`). "Run sweep all" = both (~85 page loads, only on request). `sweepSearches({ groups: ['eu'] })` gives the EU list.
+
 LinkedIn gotchas: always use geoIds (names get ignored or snapped to districts); never add the experience-level filter (it hides unlabelled listings); only take the first N cards where N is the result count; scroll the list before reading; "Jobs you may be interested in" means zero results.
 
 Use the Claude in Chrome extension (the user's signed-in Chrome) for the LinkedIn steps.

@@ -16,6 +16,15 @@
  *  Updated 23 Oct 2026: Germany + Poland added with localised titles, city
  *  searches, full-time/on-site roles, and country-wide contract searches.
  *
+ *  TRIGGERS (SWEEP_AMS.triggers):
+ *    "Run sweep AMS" → core group: Netherlands, Germany, Poland, UK  (~40 loads)
+ *    "Run sweep EU"  → eu group: Czechia (Prague), Spain (Madrid, Barcelona),
+ *                      Italy (Milan, Rome), Switzerland (Zurich, Geneva,
+ *                      Lausanne), Belgium (Antwerp, Ghent, Brussels) (~45 loads)
+ *    "Run sweep all" → both — only if the user asks; ~85 page loads.
+ *  The eu group was prepared 26 Oct 2026 without a LinkedIn test run: on its
+ *  first run follow the FIRST RUN CHECKLIST next to the EU countries.
+ *
  *  1. CITY SEARCHES — ALL JOB TYPES (full-time, contract, on-site, hybrid, remote)
  *     For every city in SWEEP_AMS.countries[*].cities: one search per query
  *     in that country's `queries` (English + local language), past week.
@@ -111,6 +120,17 @@ const LOCAL = {
   nl: 'Producent OR "Uitvoerend producent" OR "Postproductie producent" OR Productieleider OR "Hoofd productie" OR "Video producer"',
   de: 'Produzent OR Filmproduzent OR Herstellungsleiter OR Herstellungsleitung OR Postproduktion OR Postproduktionsleiter OR "Producer Postproduktion" OR "Video Producer"',
   pl: '"Producent wykonawczy" OR "Producent filmowy" OR "Producent reklam" OR "Producent wideo" OR "Producent postprodukcji" OR "Kierownik postprodukcji" OR Postprodukcja OR "Szef produkcji" OR "Kierownik produkcji"',
+  // --- prepared 26 Oct 2026, not yet run on LinkedIn (see EU countries below) ---
+  // Czech: avoid bare "Produkční" (also an adjective in factory ads, e.g. "produkční plánovač")
+  cs: 'Producent OR "Výkonný producent" OR "Výkonná producentka" OR "Vedoucí produkce" OR "Vedoucí postprodukce" OR Postprodukce OR "Postprodukční producent" OR "Koordinátor postprodukce"',
+  // Spanish (+ two Catalan terms for Barcelona). Avoid "Director/Jefe de producción" — mostly factory jobs in Spain
+  es: '"Productor ejecutivo" OR "Productora ejecutiva" OR "Productor audiovisual" OR "Productora audiovisual" OR "Productor de postproducción" OR "Coordinador de postproducción" OR "Supervisor de postproducción" OR Postproducción OR "Productor executiu" OR Postproducció',
+  // Italian. "Organizzatore generale" is the film line-producer title; avoid "Direttore di produzione" (plant manager)
+  it: '"Produttore esecutivo" OR "Produttrice esecutiva" OR "Organizzatore generale" OR "Post producer" OR "Responsabile post-produzione" OR "Responsabile postproduzione" OR "Supervisore post-produzione" OR "Coordinatore post-produzione" OR Postproduzione OR "Producer pubblicitario"',
+  // French for Romandy (Geneva, Lausanne). Avoid "Directeur de production" (factory)
+  fr: '"Producteur exécutif" OR "Productrice exécutive" OR "Chargé de production" OR "Chargée de production" OR "Directeur de postproduction" OR "Coordinateur postproduction" OR "Responsable postproduction" OR Postproduction OR "Producteur audiovisuel"',
+  // Flemish (Belgian Dutch): "productiecoördinator" is common in Flanders; "productieleider" can be factory — filter by sector
+  vl: 'Producent OR "Uitvoerend producent" OR Productieleider OR Postproductie OR "Postproductie coördinator" OR Productiecoördinator OR "Hoofd productie" OR "Video producer"',
 }
 
 export const SWEEP_AMS = {
@@ -128,6 +148,11 @@ export const SWEEP_AMS = {
     ],
     dutch: ['Producent', 'Uitvoerend producent', 'Postproductie producent', 'Productieleider', 'Hoofd productie', 'Video producer'],
     german: ['Produzent', 'Filmproduzent', 'Herstellungsleiter / Herstellungsleitung', 'Postproduktion', 'Postproduktionsleiter', 'Producer Postproduktion', 'Video Producer'],
+    czech: ['Producent', 'Výkonný producent / Výkonná producentka', 'Vedoucí produkce', 'Vedoucí postprodukce', 'Postprodukce', 'Postprodukční producent', 'Koordinátor postprodukce'],
+    spanish: ['Productor/a ejecutivo/a', 'Productor/a audiovisual', 'Productor/a de postproducción', 'Coordinador/a de postproducción', 'Supervisor/a de postproducción', 'Postproducción', 'Catalan: Productor executiu, Postproducció'],
+    italian: ['Produttore/Produttrice esecutivo/a', 'Organizzatore generale', 'Post producer', 'Responsabile post-produzione', 'Supervisore post-produzione', 'Coordinatore post-produzione', 'Postproduzione', 'Producer pubblicitario'],
+    french: ['Producteur/Productrice exécutif/ve', 'Chargé/e de production', 'Directeur de postproduction', 'Coordinateur postproduction', 'Responsable postproduction', 'Postproduction', 'Producteur audiovisuel'],
+    flemish: ['Producent', 'Uitvoerend producent', 'Productieleider', 'Postproductie', 'Postproductie coördinator', 'Productiecoördinator', 'Hoofd productie', 'Video producer'],
     polish: ['Producent wykonawczy', 'Producent filmowy', 'Producent reklam', 'Producent wideo', 'Producent postprodukcji', 'Kierownik postprodukcji', 'Postprodukcja', 'Szef produkcji', 'Kierownik produkcji'],
   },
   countries: {
@@ -178,28 +203,121 @@ export const SWEEP_AMS = {
       remoteContractOnly: true,
       postSearches: [],
     },
+
+    /* ---------------- EU group — prepared 26 Oct 2026, NOT yet run ----------------
+     * FIRST RUN CHECKLIST (status: 'pending'):
+     *  1. Country geoIds below are from memory — open each country search once and
+     *     check the location box shows the right country; fix if not.
+     *  2. City geoIds are null: type the city in LinkedIn's location box, pick the
+     *     city (or its metropolitan area), read geoId= from the URL, save it here.
+     *     Cities without a geoId fall back to location=<name>, which LinkedIn may
+     *     snap to a district — don't trust those results.
+     *  3. Run with { firstPass: true } (past month), review noise per query, then
+     *     set status: 'active' and commit.
+     */
+    Czechia: {
+      group: 'eu', status: 'pending',
+      geoId: '104508036',
+      // Prague's industry is largely international service production — English matters as much as Czech
+      queries: { english: EN_CORE, czech: LOCAL.cs },
+      cities: [{ name: 'Prague', geoId: null, location: 'Prague, Czechia' }],
+      contractSearch: true,
+      postSearches: ['hledáme producenta', 'hledáme vedoucího produkce'],
+    },
+    Spain: {
+      group: 'eu', status: 'pending',
+      geoId: '105646813',
+      queries: { english: EN_CORE, spanish: LOCAL.es },
+      cities: [
+        { name: 'Madrid', geoId: null, location: 'Madrid, Community of Madrid, Spain' },
+        { name: 'Barcelona', geoId: null, location: 'Barcelona, Catalonia, Spain' },
+      ],
+      contractSearch: true,
+      postSearches: ['buscamos productor audiovisual', 'buscamos productor ejecutivo', 'busquem productor'],
+    },
+    Italy: {
+      group: 'eu', status: 'pending',
+      geoId: '103350119',
+      queries: { english: EN_CORE, italian: LOCAL.it },
+      // Milan = advertising & post houses; Rome = film / TV
+      cities: [
+        { name: 'Milan', geoId: null, location: 'Milan, Lombardy, Italy' },
+        { name: 'Rome', geoId: null, location: 'Rome, Latium, Italy' },
+      ],
+      contractSearch: true,
+      postSearches: ['cerchiamo producer', 'cercasi produttore esecutivo', 'cerchiamo post producer'],
+    },
+    Switzerland: {
+      group: 'eu', status: 'pending',
+      geoId: '106693272',
+      // Per-city language: German for Zurich, French for Geneva / Lausanne
+      queries: { english: EN_CORE, german: LOCAL.de, french: LOCAL.fr },
+      cities: [
+        { name: 'Zurich', geoId: null, location: 'Zurich, Switzerland', queries: ['english', 'german'] },
+        { name: 'Geneva', geoId: null, location: 'Geneva, Switzerland', queries: ['english', 'french'] },
+        { name: 'Lausanne', geoId: null, location: 'Lausanne, Vaud, Switzerland', queries: ['english', 'french'] },
+      ],
+      contractSearch: true,
+      postSearches: ['Producer gesucht Zürich', 'nous recherchons un chargé de production', 'recherche producteur exécutif'],
+    },
+    Belgium: {
+      group: 'eu', status: 'pending',
+      geoId: '100565514',
+      // Focus on Flanders; Brussels included for VRT / DPG Media / agencies (Flemish + English only)
+      queries: { english: EN_CORE, flemish: LOCAL.vl },
+      cities: [
+        { name: 'Antwerp', geoId: null, location: 'Antwerp, Flemish Region, Belgium' },
+        { name: 'Ghent', geoId: null, location: 'Ghent, Flemish Region, Belgium' },
+        { name: 'Brussels', geoId: null, location: 'Brussels, Brussels Region, Belgium' },
+      ],
+      contractSearch: true,
+      // The Dutch post searches already catch many Flemish posts; these add Flemish phrasing + cities
+      postSearches: ['wij zoeken een producer', 'productieleider gezocht Antwerpen', 'producer gezocht Gent'],
+    },
+  },
+  // Which groups each trigger runs
+  triggers: {
+    'Run sweep AMS': ['core'],   // Netherlands, Germany, Poland, UK
+    'Run sweep EU': ['eu'],      // Czechia, Spain, Italy, Switzerland, Belgium
+    'Run sweep all': ['core', 'eu'],
+  },
+  // Local job boards that carry more film / post roles than LinkedIn in these markets (not searched automatically)
+  localBoards: {
+    Czechia: ['jobs.cz', 'filmcommission.gov.cz (production company directory)'],
+    Spain: ['InfoJobs', 'Crew United (es)'],
+    Italy: ['Cinemotore', 'Indeed IT'],
+    Switzerland: ['jobup.ch (Romandy)', 'jobs.ch', 'Crew United'],
+    Belgium: ['mediarte.be (Flemish & Brussels audiovisual sector)', 'VDAB'],
+    Poland: ['pracuj.pl'],
   },
   // Time windows: past week for regular sweeps; past month for a first pass on a new country/city
   timeWindow: { regular: 'r604800', firstPass: 'r2592000' },
   skip: [
     'junior', 'intern', 'internship', 'stage', 'stagiair', 'trainee', 'graduate', 'werkstudent', 'assistant',
     'assistent', 'runner', 'praktikant', 'praktikum', 'stażysta', 'staż', 'praktykant', 'asystent',
+    // Czech / Spanish / Italian / French / Flemish
+    'stážista', 'stáž', 'becario', 'becaria', 'prácticas', 'auxiliar', 'ayudante', 'asistente',
+    'stagista', 'tirocinio', 'tirocinante', 'assistente', 'stagiaire', 'alternance', 'apprenti', 'jobstudent',
   ],
   overdueDays: 14,
 }
 
 // Every LinkedIn search for a sweep, in order: [{ label, url }]
-export function sweepSearches({ firstPass = false } = {}) {
+// groups: which country groups to include ('core' = NL/DE/PL/UK, 'eu' = CZ/ES/IT/CH/BE)
+export function sweepSearches({ firstPass = false, groups = ['core'] } = {}) {
   const tpr = firstPass ? SWEEP_AMS.timeWindow.firstPass : SWEEP_AMS.timeWindow.regular
   const J = 'https://www.linkedin.com/jobs/search/?keywords='
   const P = 'https://www.linkedin.com/search/results/content/?keywords='
   const enc = encodeURIComponent
   const out = []
   for (const [country, c] of Object.entries(SWEEP_AMS.countries)) {
+    if (!groups.includes(c.group || 'core')) continue
     for (const city of c.cities) {
       const where = city.geoId ? `&geoId=${city.geoId}` : `&location=${enc(city.location)}`
-      for (const [qName, q] of Object.entries(c.queries)) {
-        out.push({ label: `${city.name} · ${qName} · all job types`, url: `${J}${enc(q)}${where}&f_TPR=${tpr}` })
+      const flag = city.geoId ? '' : ' · ⚠ geoId not verified'
+      const qNames = city.queries || Object.keys(c.queries)
+      for (const qName of qNames) {
+        out.push({ label: `${city.name} · ${qName} · all job types${flag}`, url: `${J}${enc(c.queries[qName])}${where}&f_TPR=${tpr}` })
       }
     }
     for (const [qName, q] of Object.entries(c.queries)) {
