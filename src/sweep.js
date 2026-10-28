@@ -20,10 +20,10 @@
  *    "Run sweep AMS" → core group: Netherlands, Germany, Poland, UK  (~40 loads)
  *    "Run sweep EU"  → eu group: Czechia (Prague), Spain (Madrid, Barcelona),
  *                      Italy (Milan, Rome), Switzerland (Zurich, Geneva,
- *                      Lausanne), Belgium (Antwerp, Ghent, Brussels) (~45 loads)
- *    "Run sweep all" → both — only if the user asks; ~85 page loads.
- *  The eu group was prepared 26 Oct 2026 without a LinkedIn test run: on its
- *  first run follow the FIRST RUN CHECKLIST next to the EU countries.
+ *                      Lausanne), Belgium (Antwerp, Ghent, Brussels)  (~21 loads)
+ *    "Run sweep all" → both — only if the user asks (first run 28 Oct 2026).
+ *  The eu group was first run on 28 Oct 2026 (~21 loads): English titles only
+ *  except Flemish — see FIRST-RUN FINDINGS next to the EU countries.
  *
  *  1. CITY SEARCHES — ALL JOB TYPES (full-time, contract, on-site, hybrid, remote)
  *     For every city in SWEEP_AMS.countries[*].cities: one search per query
@@ -113,6 +113,10 @@ const EN_GROUPS = {
 // One combined English query for Germany / Poland / UK (keeps page loads down)
 const EN_CORE =
   '"Post Producer" OR "Post-Production" OR "Commercial Producer" OR "Executive Producer" OR "Line Producer" OR "Head of Production" OR "Post Production Supervisor" OR "Video Lead" OR "Head of Video" OR "Senior Video Producer" OR "Film Producer" OR "Agency Producer" OR "Integrated Producer"'
+// EU group (first run 28 Oct 2026): most producer jobs in Madrid / Barcelona / Milan are
+// titled just "Producer" or "Senior Producer", so the EU query adds those plus
+// "Head of Post Production". Result counts stay small outside the big cities.
+const EN_EU = '"Producer" OR "Senior Producer" OR "Head of Post Production" OR ' + EN_CORE
 
 // Local-language titles. Avoid bare words that also mean factory work
 // (DE "Produktionsleitung", PL bare "Producent" = manufacturer).
@@ -204,8 +208,20 @@ export const SWEEP_AMS = {
       postSearches: [],
     },
 
-    /* ---------------- EU group — prepared 26 Oct 2026, NOT yet run ----------------
-     * FIRST RUN CHECKLIST (status: 'pending'):
+    /* ---------------- EU group — first run 28 Oct 2026, now active ----------------
+     * FIRST-RUN FINDINGS (28 Oct 2026, past-month window):
+     *  - Every relevant job found was posted with an ENGLISH title, even in Madrid,
+     *    Barcelona and Milan. Quoted local titles (Spanish, Italian, French, Czech)
+     *    returned ZERO results; unquoted local words returned hundreds of loosely
+     *    related jobs. So CZ / ES / IT / CH run the English EN_EU query only.
+     *    LOCAL.cs / .es / .it / .fr stay above for reference and local job boards.
+     *  - Flemish quoted titles work (small numbers) — kept for Belgium.
+     *  - Local post searches were noise (Spanish -> Latin America; Italian, Swiss,
+     *    Czech unrelated). Only the Flemish post search found a real hiring post.
+     *  - Prague, Rome, Lausanne: almost nothing on LinkedIn — use local boards.
+     *  - Spain + Milan produced most of the 13 EU roles saved on the first run.
+     * Original checklist (done 28 Oct: country geoIds confirmed; city geoIds are
+     * LinkedIn metropolitan areas, which include suburbs):
      *  1. Country geoIds below are from memory — open each country search once and
      *     check the location box shows the right country; fix if not.
      *  2. City geoIds are null: type the city in LinkedIn's location box, pick the
@@ -216,63 +232,63 @@ export const SWEEP_AMS = {
      *     set status: 'active' and commit.
      */
     Czechia: {
-      group: 'eu', status: 'pending',
+      group: 'eu', status: 'active',
       geoId: '104508036',
       // Prague's industry is largely international service production — English matters as much as Czech
-      queries: { english: EN_CORE, czech: LOCAL.cs },
-      cities: [{ name: 'Prague', geoId: null, location: 'Prague, Czechia' }],
+      queries: { english: EN_EU }, // Czech titles: 0 results (28 Oct)
+      cities: [{ name: 'Prague', geoId: '90010322', location: 'Prague, Czechia' }],
       contractSearch: true,
-      postSearches: ['hledáme producenta', 'hledáme vedoucího produkce'],
+      postSearches: [], // Czech posts were noise (28 Oct)
     },
     Spain: {
-      group: 'eu', status: 'pending',
+      group: 'eu', status: 'active',
       geoId: '105646813',
-      queries: { english: EN_CORE, spanish: LOCAL.es },
+      queries: { english: EN_EU }, // Spanish titles: 0 quoted / noise unquoted (28 Oct)
       cities: [
-        { name: 'Madrid', geoId: null, location: 'Madrid, Community of Madrid, Spain' },
-        { name: 'Barcelona', geoId: null, location: 'Barcelona, Catalonia, Spain' },
+        { name: 'Madrid', geoId: '90009790', location: 'Madrid, Community of Madrid, Spain' },
+        { name: 'Barcelona', geoId: '90009761', location: 'Barcelona, Catalonia, Spain' },
       ],
       contractSearch: true,
-      postSearches: ['buscamos productor audiovisual', 'buscamos productor ejecutivo', 'busquem productor'],
+      postSearches: [], // Spanish posts are mostly Latin America (28 Oct)
     },
     Italy: {
-      group: 'eu', status: 'pending',
+      group: 'eu', status: 'active',
       geoId: '103350119',
-      queries: { english: EN_CORE, italian: LOCAL.it },
+      queries: { english: EN_EU }, // Italian titles: 0 results (28 Oct)
       // Milan = advertising & post houses; Rome = film / TV
       cities: [
-        { name: 'Milan', geoId: null, location: 'Milan, Lombardy, Italy' },
-        { name: 'Rome', geoId: null, location: 'Rome, Latium, Italy' },
+        { name: 'Milan', geoId: '90009936', location: 'Milan, Lombardy, Italy' },
+        { name: 'Rome', geoId: '90009956', location: 'Rome, Latium, Italy' },
       ],
       contractSearch: true,
-      postSearches: ['cerchiamo producer', 'cercasi produttore esecutivo', 'cerchiamo post producer'],
+      postSearches: [], // Italian posts were noise (28 Oct)
     },
     Switzerland: {
-      group: 'eu', status: 'pending',
+      group: 'eu', status: 'active',
       geoId: '106693272',
-      // Per-city language: German for Zurich, French for Geneva / Lausanne
-      queries: { english: EN_CORE, german: LOCAL.de, french: LOCAL.fr },
+      // German / French titles were 0 or noise on LinkedIn (28 Oct) — English only
+      queries: { english: EN_EU },
       cities: [
-        { name: 'Zurich', geoId: null, location: 'Zurich, Switzerland', queries: ['english', 'german'] },
-        { name: 'Geneva', geoId: null, location: 'Geneva, Switzerland', queries: ['english', 'french'] },
-        { name: 'Lausanne', geoId: null, location: 'Lausanne, Vaud, Switzerland', queries: ['english', 'french'] },
+        { name: 'Zurich', geoId: '90009888', location: 'Zurich, Switzerland' },
+        { name: 'Geneva', geoId: '90009886', location: 'Geneva, Switzerland' },
+        { name: 'Lausanne', geoId: '90009889', location: 'Lausanne, Vaud, Switzerland' },
       ],
       contractSearch: true,
-      postSearches: ['Producer gesucht Zürich', 'nous recherchons un chargé de production', 'recherche producteur exécutif'],
+      postSearches: [], // Swiss posts were noise (28 Oct)
     },
     Belgium: {
-      group: 'eu', status: 'pending',
+      group: 'eu', status: 'active',
       geoId: '100565514',
       // Focus on Flanders; Brussels included for VRT / DPG Media / agencies (Flemish + English only)
-      queries: { english: EN_CORE, flemish: LOCAL.vl },
+      queries: { english: EN_EU, flemish: LOCAL.vl },
       cities: [
-        { name: 'Antwerp', geoId: null, location: 'Antwerp, Flemish Region, Belgium' },
-        { name: 'Ghent', geoId: null, location: 'Ghent, Flemish Region, Belgium' },
-        { name: 'Brussels', geoId: null, location: 'Brussels, Brussels Region, Belgium' },
+        { name: 'Antwerp', geoId: '90009603', location: 'Antwerp, Flemish Region, Belgium' },
+        { name: 'Ghent', geoId: '90009596', location: 'Ghent, Flemish Region, Belgium' },
+        { name: 'Brussels', geoId: '90009604', location: 'Brussels, Brussels Region, Belgium' },
       ],
       contractSearch: true,
-      // The Dutch post searches already catch many Flemish posts; these add Flemish phrasing + cities
-      postSearches: ['wij zoeken een producer', 'productieleider gezocht Antwerpen', 'producer gezocht Gent'],
+      // The Dutch post searches already catch many Flemish posts; city-specific ones were empty (28 Oct)
+      postSearches: ['wij zoeken een producer'],
     },
   },
   // Which groups each trigger runs
