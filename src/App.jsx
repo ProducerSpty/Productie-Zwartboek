@@ -773,6 +773,10 @@ function Overview({ data, meta, goTo, onOpen, onNew }) {
     .filter((j) => !j.outcome && (j.status === 'Applied' || j.status === 'No Response'))
     .map((j) => ({ ...j, waited: j.statusChangedAt ? daysBetween(dayOf(j.statusChangedAt), today) : 0 }))
     .sort((a, b) => b.waited - a.waited)
+  // Jobs you've looked into and want to apply for (status "Researching"), highest priority first
+  const readyToApply = jobs
+    .filter((j) => !j.outcome && j.status === 'Researching')
+    .sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0))
 
   // Agencies with a known contact but nothing active for them in the pipeline
   const activePipeline = pipeline.filter((r) => r.stage !== 'Archived')
@@ -825,7 +829,71 @@ function Overview({ data, meta, goTo, onOpen, onNew }) {
         />
       </div>
 
-      <div className="dash-grid">
+      <div className="dash-grid dash-row4">
+        <Panel title="New from last sweep" action={() => goTo('jobs-freelance')}>
+          {sweep.jobs.length === 0 && <div className="muted small">No jobs added yet.</div>}
+          {sweep.jobs.slice(0, 8).map((j) => (
+            <Row key={j.id} onClick={() => onOpen('jobs', j)}
+              title={j.role || j.title}
+              sub={[j.company, j.type, j.location].filter(Boolean).join(' · ')}
+              right={<span className={stageClass(j.status)}>{j.status}</span>}
+            />
+          ))}
+        </Panel>
+
+        <Panel title={`Ready to apply (${readyToApply.length})`} action={() => goTo('jobs-freelance')}>
+          {readyToApply.length === 0 && <div className="muted small">Nothing here yet. Set a job to “Researching” once you want to apply.</div>}
+          {readyToApply.slice(0, 8).map((j) => (
+            <Row key={j.id} onClick={() => onOpen('jobs', j)}
+              title={j.role || j.title}
+              sub={[j.company, j.type, j.location].filter(Boolean).join(' · ')}
+              right={Number(j.priority) > 0 ? <span className="stars-static">{'★'.repeat(Number(j.priority))}</span> : null}
+            />
+          ))}
+          {readyToApply.length > 8 && <div className="muted small pad">+ {readyToApply.length - 8} more</div>}
+        </Panel>
+
+        <Panel title={`Awaiting reply (${awaitingReply.length})`} action={() => goTo('jobs-freelance')}>
+          {awaitingReply.length === 0 && <div className="muted small">No applications waiting on a reply.</div>}
+          {awaitingReply.slice(0, 8).map((j) => (
+            <Row key={j.id} onClick={() => onOpen('jobs', j)}
+              title={j.role || j.title}
+              sub={[j.company, j.type, j.waited ? `${j.status} ${j.waited} day${j.waited === 1 ? '' : 's'} ago` : `${j.status} today`].filter(Boolean).join(' · ')}
+              right={
+                j.status === 'Applied' && j.waited >= NO_REPLY_DAYS ? (
+                  <span className="badge-noreply">{NO_REPLY_DAYS} days no reply</span>
+                ) : (
+                  <span className={stageClass(j.status)}>{j.status}</span>
+                )
+              }
+            />
+          ))}
+        </Panel>
+
+        <Panel title="Follow-ups" action={() => goTo('pipeline')}>
+          {followUps.length === 0 && <div className="muted small">Nothing scheduled. Add a “Follow up on” date to a contact.</div>}
+          {followUps.map((r) => (
+            <Row key={r.id} onClick={() => onOpen('pipeline', r)}
+              title={r.name}
+              sub={r.nextAction || r.company}
+              right={<span className={r.nextDate < today ? 'overdue' : r.nextDate === today ? 'due-today' : 'muted'}>{r.nextDate < today ? 'Overdue · ' : ''}{fmtDate(r.nextDate)}</span>}
+            />
+          ))}
+        </Panel>
+      </div>
+
+      <div className="dash-grid dash-lower">
+        <Panel title="Upcoming bookings" action={() => goTo('bookings')}>
+          {upcoming.length === 0 && <div className="muted small">No upcoming bookings.</div>}
+          {upcoming.map((b) => (
+            <Row key={b.id} onClick={() => onOpen('bookings', b)}
+              title={b.project}
+              sub={[b.client, fmtRange(b.start, b.end)].filter(Boolean).join(' · ')}
+              right={<span className={stageClass(b.kind)}>{b.kind}</span>}
+            />
+          ))}
+        </Panel>
+
         <Panel title={`Agencies not in your pipeline (${agenciesToReach.length})`} action={() => goTo('agencies')}>
           {agenciesToReach.length === 0 && (
             <div className="muted small">Every agency with a known contact already has an active pipeline entry.</div>
@@ -854,56 +922,6 @@ function Overview({ data, meta, goTo, onOpen, onNew }) {
             </div>
           ))}
           {agenciesToReach.length > 8 && <div className="muted small pad">+ {agenciesToReach.length - 8} more</div>}
-        </Panel>
-
-        <Panel title={`Awaiting reply (${awaitingReply.length})`} action={() => goTo('jobs-freelance')}>
-          {awaitingReply.length === 0 && <div className="muted small">No applications waiting on a reply.</div>}
-          {awaitingReply.slice(0, 8).map((j) => (
-            <Row key={j.id} onClick={() => onOpen('jobs', j)}
-              title={j.role || j.title}
-              sub={[j.company, j.type, j.waited ? `${j.status} ${j.waited} day${j.waited === 1 ? '' : 's'} ago` : `${j.status} today`].filter(Boolean).join(' · ')}
-              right={
-                j.status === 'Applied' && j.waited >= NO_REPLY_DAYS ? (
-                  <span className="badge-noreply">{NO_REPLY_DAYS} days no reply</span>
-                ) : (
-                  <span className={stageClass(j.status)}>{j.status}</span>
-                )
-              }
-            />
-          ))}
-        </Panel>
-
-        <Panel title="New from last sweep" action={() => goTo('jobs-freelance')}>
-          {sweep.jobs.length === 0 && <div className="muted small">No jobs added yet.</div>}
-          {sweep.jobs.slice(0, 8).map((j) => (
-            <Row key={j.id} onClick={() => onOpen('jobs', j)}
-              title={j.role || j.title}
-              sub={[j.company, j.type, j.location].filter(Boolean).join(' · ')}
-              right={<span className={stageClass(j.status)}>{j.status}</span>}
-            />
-          ))}
-        </Panel>
-
-        <Panel title="Follow-ups" action={() => goTo('pipeline')}>
-          {followUps.length === 0 && <div className="muted small">Nothing scheduled. Add a “Follow up on” date to a contact.</div>}
-          {followUps.map((r) => (
-            <Row key={r.id} onClick={() => onOpen('pipeline', r)}
-              title={r.name}
-              sub={r.nextAction || r.company}
-              right={<span className={r.nextDate < today ? 'overdue' : r.nextDate === today ? 'due-today' : 'muted'}>{r.nextDate < today ? 'Overdue · ' : ''}{fmtDate(r.nextDate)}</span>}
-            />
-          ))}
-        </Panel>
-
-        <Panel title="Upcoming bookings" action={() => goTo('bookings')}>
-          {upcoming.length === 0 && <div className="muted small">No upcoming bookings.</div>}
-          {upcoming.map((b) => (
-            <Row key={b.id} onClick={() => onOpen('bookings', b)}
-              title={b.project}
-              sub={[b.client, fmtRange(b.start, b.end)].filter(Boolean).join(' · ')}
-              right={<span className={stageClass(b.kind)}>{b.kind}</span>}
-            />
-          ))}
         </Panel>
       </div>
     </div>
